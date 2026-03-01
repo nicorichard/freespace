@@ -16,6 +16,10 @@ struct Cli {
     #[arg(long = "module-dir", global = true)]
     module_dirs: Vec<String>,
 
+    /// Directory to search for local targets (can be repeated)
+    #[arg(long = "search-dir", global = true)]
+    search_dirs: Vec<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -33,9 +37,9 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ModuleCommand {
-    /// Install a module from a GitHub source
+    /// Install a module from a source
     Install {
-        /// Source identifier (e.g. github:user/repo@v1.0.0#module-name)
+        /// Source (e.g. github:user/repo@v1.0.0#module-name or /path/to/module)
         source: String,
     },
     /// List installed modules
@@ -65,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
             let mut terminal = tui::init()?;
 
             // Create app and run the main event loop
-            let mut app = app::App::new(cli.module_dirs);
+            let mut app = app::App::new(cli.module_dirs, cli.search_dirs);
             app.run(&mut terminal)?;
 
             // Restore terminal on normal exit
@@ -200,7 +204,16 @@ fn cmd_inspect(modules_dir: &std::path::Path, name: &str) -> anyhow::Result<()> 
             .description
             .as_deref()
             .unwrap_or("(no description)");
-        println!("  {} - {}", target.path, desc);
+        if let Some(ref path) = target.path {
+            println!("  {} - {}", path, desc);
+        } else if let Some(ref name) = target.name {
+            let indicator = target
+                .indicator
+                .as_ref()
+                .map(|i| format!(" (indicator: {})", i))
+                .unwrap_or_default();
+            println!("  [local] {}{} - {}", name, indicator, desc);
+        }
     }
 
     if let Some(source) = module::installer::read_source_info(&module_dir) {

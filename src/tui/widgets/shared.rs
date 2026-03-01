@@ -12,7 +12,7 @@ pub fn module_icon(name: &str) -> &'static str {
     } else if lower.contains("docker") {
         "\u{1f433}" // 🐳
     } else if lower.contains("cache") {
-        "\u{1f5c2}" // 🗂
+        "\u{1f5c2}\u{fe0f}" // 🗂️
     } else {
         "\u{1f4c1}" // 📁
     }
