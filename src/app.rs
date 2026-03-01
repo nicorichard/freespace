@@ -435,6 +435,7 @@ pub enum ModuleStatus {
 }
 
 /// Overall scan status.
+#[allow(dead_code)]
 pub enum ScanStatus {
     Idle,
     Scanning,
@@ -446,7 +447,7 @@ pub struct Item {
     pub name: String,
     pub path: PathBuf,
     pub size: Option<u64>,
-    pub item_type: ItemType,
+    pub _item_type: ItemType,
 }
 
 /// The type of a discovered filesystem item.

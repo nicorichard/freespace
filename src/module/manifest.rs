@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 /// Represents a parsed module manifest (module.toml).
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct Module {
     pub name: String,
     pub version: String,
@@ -15,6 +16,7 @@ pub struct Module {
 
 /// A target path pattern that a module scans.
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct Target {
     pub path: String,
     pub description: Option<String>,

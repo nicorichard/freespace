@@ -19,6 +19,7 @@ pub enum ScanMessage {
         module_index: usize,
     },
     /// An error occurred while scanning a module.
+    #[allow(dead_code)]
     ModuleError {
         module_index: usize,
         error: String,
@@ -89,7 +90,7 @@ pub fn start_scan(modules: Vec<Module>, tx: mpsc::UnboundedSender<ScanMessage>) 
                         name,
                         path,
                         size: Some(size),
-                        item_type,
+                        _item_type: item_type,
                     };
 
                     if tx.send(ScanMessage::ItemDiscovered { module_index, item }).is_err() {
