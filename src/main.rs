@@ -37,13 +37,33 @@ enum ModuleCommand {
     Inspect,
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         None => {
-            // Default: launch TUI
-            println!("Launching TUI... (not yet implemented)");
+            // Install panic hook to restore terminal on panic
+            tui::install_panic_hook();
+
+            // Initialize terminal
+            let mut terminal = tui::init()?;
+
+            // Placeholder: clear screen and wait for 'q' to quit
+            terminal.clear()?;
+
+            loop {
+                use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+                if event::poll(std::time::Duration::from_millis(250))? {
+                    if let Event::Key(key) = event::read()? {
+                        if key.kind == KeyEventKind::Press && key.code == KeyCode::Char('q') {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Restore terminal on normal exit
+            tui::restore()?;
         }
         Some(Command::Scan) => {
             println!("scan: not yet implemented");
@@ -55,4 +75,6 @@ fn main() {
             ModuleCommand::Inspect => println!("module inspect: not yet implemented"),
         },
     }
+
+    Ok(())
 }
