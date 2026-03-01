@@ -177,3 +177,101 @@ fn current_platform() -> String {
         other => other.to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_module_toml(dir: &Path, name: &str, platforms: &[&str]) {
+        let module_dir = dir.join(name);
+        fs::create_dir_all(&module_dir).unwrap();
+        let platforms_str: Vec<String> = platforms.iter().map(|p| format!("\"{}\"", p)).collect();
+        let toml = format!(
+            r#"name = "{}"
+version = "1.0.0"
+description = "Test"
+author = "tester"
+platforms = [{}]
+
+[[targets]]
+path = "~/test"
+"#,
+            name,
+            platforms_str.join(", ")
+        );
+        fs::write(module_dir.join("module.toml"), toml).unwrap();
+    }
+
+    #[test]
+    fn load_builtin_empty_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (modules, warnings) = load_builtin_modules(tmp.path());
+        assert!(modules.is_empty());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn load_builtin_single_matching_platform() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let platform = current_platform();
+        write_module_toml(tmp.path(), "test-mod", &[&platform]);
+
+        let (modules, warnings) = load_builtin_modules(tmp.path());
+        assert_eq!(modules.len(), 1);
+        assert_eq!(modules[0].name, "test-mod");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn load_builtin_filtered_by_platform() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        write_module_toml(tmp.path(), "wrong-platform", &["nonexistent-os"]);
+
+        let (modules, warnings) = load_builtin_modules(tmp.path());
+        assert!(modules.is_empty());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn load_builtin_invalid_manifest() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mod_dir = tmp.path().join("broken");
+        fs::create_dir(&mod_dir).unwrap();
+        fs::write(mod_dir.join("module.toml"), "invalid toml {{{{").unwrap();
+
+        let (modules, warnings) = load_builtin_modules(tmp.path());
+        assert!(modules.is_empty());
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn load_builtin_skips_non_directories() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        fs::write(tmp.path().join("not-a-dir.toml"), "data").unwrap();
+
+        let (modules, warnings) = load_builtin_modules(tmp.path());
+        assert!(modules.is_empty());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn load_all_modules_merges_dirs() {
+        let tmp1 = tempfile::TempDir::new().unwrap();
+        let tmp2 = tempfile::TempDir::new().unwrap();
+        let platform = current_platform();
+        write_module_toml(tmp1.path(), "mod-a", &[&platform]);
+        write_module_toml(tmp2.path(), "mod-b", &[&platform]);
+
+        let extra = vec![tmp2.path().display().to_string()];
+        let (modules, _) = load_all_modules(Some(tmp1.path().to_path_buf()), &extra);
+        assert_eq!(modules.len(), 2);
+    }
+
+    #[test]
+    fn load_all_modules_warns_missing_extra_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let extra = vec!["/nonexistent/module/dir/xyz".to_string()];
+        let (_, warnings) = load_all_modules(Some(tmp.path().to_path_buf()), &extra);
+        assert!(!warnings.is_empty());
+    }
+}

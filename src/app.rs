@@ -53,7 +53,8 @@ pub struct App {
 impl App {
     /// Create a new App with default state, load modules, and start scanning.
     pub fn new(cli_module_dirs: Vec<String>, cli_search_dirs: Vec<String>) -> Self {
-        let (modules, search_dirs) = Self::load_modules_and_config(cli_module_dirs, cli_search_dirs);
+        let (modules, search_dirs) =
+            Self::load_modules_and_config(cli_module_dirs, cli_search_dirs);
 
         // Create channel for scan messages
         let (tx, rx) = mpsc::unbounded_channel();
@@ -205,7 +206,10 @@ impl App {
                         ms.total_size = Some(total);
                     }
                 }
-                ScanMessage::ModuleError { module_index, error } => {
+                ScanMessage::ModuleError {
+                    module_index,
+                    error,
+                } => {
                     if let Some(ms) = self.modules.get_mut(module_index) {
                         ms.status = ModuleStatus::Error(error);
                     }
@@ -306,7 +310,7 @@ impl App {
     }
 
     /// Dispatch key events based on the current view.
-    fn handle_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+    pub fn handle_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
         // Ctrl+C always quits, even during filter input
         if key == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
             self.should_quit = true;
@@ -423,7 +427,9 @@ impl App {
                 if let Some(&module_idx) = sorted.get(self.selected_index) {
                     let items = &self.modules[module_idx].items;
                     let all_selected = !items.is_empty()
-                        && items.iter().all(|item| self.selected_items.contains(&item.path));
+                        && items
+                            .iter()
+                            .all(|item| self.selected_items.contains(&item.path));
                     if all_selected {
                         // Deselect all
                         for item in &self.modules[module_idx].items {
@@ -536,16 +542,22 @@ impl App {
             }
             // Select all visible items
             KeyCode::Char('a') => {
-                let paths: Vec<PathBuf> = self.current_detail_items(module_idx)
-                    .iter().map(|item| item.path.clone()).collect();
+                let paths: Vec<PathBuf> = self
+                    .current_detail_items(module_idx)
+                    .iter()
+                    .map(|item| item.path.clone())
+                    .collect();
                 for path in paths {
                     self.selected_items.insert(path);
                 }
             }
             // Deselect all visible items
             KeyCode::Char('n') => {
-                let paths: Vec<PathBuf> = self.current_detail_items(module_idx)
-                    .iter().map(|item| item.path.clone()).collect();
+                let paths: Vec<PathBuf> = self
+                    .current_detail_items(module_idx)
+                    .iter()
+                    .map(|item| item.path.clone())
+                    .collect();
                 for path in paths {
                     self.selected_items.remove(&path);
                 }
@@ -691,8 +703,7 @@ impl App {
     /// Perform live cleanup: delete selected items and update module state.
     /// When `permanent` is true, items are permanently deleted; otherwise they are moved to trash.
     fn perform_cleanup(&mut self, permanent: bool) {
-        let paths: Vec<std::path::PathBuf> =
-            self.selected_items.iter().cloned().collect();
+        let paths: Vec<std::path::PathBuf> = self.selected_items.iter().cloned().collect();
 
         let result = if permanent {
             cleaner::delete_items(&paths)
@@ -701,8 +712,7 @@ impl App {
         };
 
         // Remove successfully deleted items from module state
-        let succeeded: HashSet<PathBuf> =
-            result.succeeded.into_iter().collect();
+        let succeeded: HashSet<PathBuf> = result.succeeded.into_iter().collect();
 
         for ms in &mut self.modules {
             ms.items.retain(|item| !succeeded.contains(&item.path));
@@ -773,6 +783,30 @@ impl App {
     fn render_help(&self, frame: &mut ratatui::Frame) {
         views::help::render(self, frame);
     }
+
+    /// Build an App with controlled state for testing (no scanning, no config).
+    #[cfg(test)]
+    pub fn new_for_test(modules: Vec<ModuleState>) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        Self {
+            modules,
+            current_view: View::ModuleList,
+            selected_index: 0,
+            selected_items: HashSet::new(),
+            scan_status: ScanStatus::Complete,
+            theme: Theme::default(),
+            previous_view: View::ModuleList,
+            should_quit: false,
+            filter_active: false,
+            filter_query: String::new(),
+            filter_cursor: 0,
+            scan_rx: rx,
+            scan_tx: tx,
+            tick_count: 0,
+            drill_stack: Vec::new(),
+            module_list_index: 0,
+        }
+    }
 }
 
 /// Which view is currently displayed.
@@ -835,4 +869,359 @@ pub fn matches_filter(haystack: &str, query: &str) -> bool {
         return true;
     }
     haystack.to_lowercase().contains(&query.to_lowercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::module::manifest::{Module, Target};
+
+    /// Helper to create a test module with items.
+    fn make_module(name: &str, items: Vec<(&str, u64)>) -> ModuleState {
+        let module = Module {
+            name: name.to_string(),
+            version: "1.0.0".to_string(),
+            description: "test".to_string(),
+            author: "tester".to_string(),
+            platforms: vec!["macos".to_string()],
+            targets: vec![Target {
+                path: Some("~/test".to_string()),
+                name: None,
+                indicator: None,
+                description: None,
+            }],
+        };
+        let items = items
+            .into_iter()
+            .map(|(name, size)| Item {
+                name: name.to_string(),
+                path: PathBuf::from(format!("/tmp/test/{}", name)),
+                size: Some(size),
+                item_type: ItemType::Directory,
+            })
+            .collect();
+        ModuleState {
+            module,
+            items,
+            total_size: Some(0), // recalculated by sort
+            status: ModuleStatus::Ready,
+        }
+    }
+
+    fn make_test_app() -> App {
+        let mut m1 = make_module(
+            "docker",
+            vec![("images", 5_000_000_000), ("volumes", 2_000_000_000)],
+        );
+        m1.total_size = Some(7_000_000_000);
+
+        let mut m2 = make_module("npm-cache", vec![("_cacache", 1_000_000_000)]);
+        m2.total_size = Some(1_000_000_000);
+
+        App::new_for_test(vec![m1, m2])
+    }
+
+    // --- Navigation ---
+
+    #[test]
+    fn navigate_down_j() {
+        let mut app = make_test_app();
+        assert_eq!(app.selected_index, 0);
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE);
+        assert_eq!(app.selected_index, 1);
+    }
+
+    #[test]
+    fn navigate_down_arrow() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.selected_index, 1);
+    }
+
+    #[test]
+    fn navigate_up_k() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE);
+        assert_eq!(app.selected_index, 0);
+    }
+
+    #[test]
+    fn navigate_up_wraps() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE);
+        assert_eq!(app.selected_index, 1); // wraps to last
+    }
+
+    #[test]
+    fn navigate_down_wraps() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE);
+        assert_eq!(app.selected_index, 0); // wraps to first
+    }
+
+    #[test]
+    fn enter_opens_detail() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+        match app.current_view {
+            View::ModuleDetail(_) => {}
+            _ => panic!("expected ModuleDetail view"),
+        }
+    }
+
+    // --- Selection ---
+
+    #[test]
+    fn space_toggles_module_selection() {
+        let mut app = make_test_app();
+        assert!(app.selected_items.is_empty());
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert!(!app.selected_items.is_empty());
+        // Toggle again to deselect
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert!(app.selected_items.is_empty());
+    }
+
+    #[test]
+    fn select_all_a() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        // All items from both modules should be selected
+        assert_eq!(app.selected_items.len(), 3);
+    }
+
+    #[test]
+    fn deselect_all_n() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert_eq!(app.selected_items.len(), 3);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE);
+        assert!(app.selected_items.is_empty());
+    }
+
+    // --- View transitions ---
+
+    #[test]
+    fn q_quits() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('q'), KeyModifiers::NONE);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn ctrl_c_quits() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn ctrl_c_quits_during_filter() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('/'), KeyModifiers::NONE);
+        assert!(app.filter_active);
+        app.handle_key(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn esc_from_detail_returns_to_list() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(matches!(app.current_view, View::ModuleDetail(_)));
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(matches!(app.current_view, View::ModuleList));
+    }
+
+    #[test]
+    fn question_mark_opens_help() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('?'), KeyModifiers::NONE);
+        assert!(matches!(app.current_view, View::Help));
+    }
+
+    #[test]
+    fn esc_from_help_returns() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('?'), KeyModifiers::NONE);
+        assert!(matches!(app.current_view, View::Help));
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(matches!(app.current_view, View::ModuleList));
+    }
+
+    // --- Filter ---
+
+    #[test]
+    fn slash_activates_filter() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('/'), KeyModifiers::NONE);
+        assert!(app.filter_active);
+    }
+
+    #[test]
+    fn filter_typing_updates_query() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('/'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Char('d'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Char('o'), KeyModifiers::NONE);
+        assert_eq!(app.filter_query, "do");
+    }
+
+    #[test]
+    fn filter_esc_clears() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('/'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Char('t'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.filter_active);
+        assert!(app.filter_query.is_empty());
+    }
+
+    #[test]
+    fn filter_enter_accepts() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('/'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Char('d'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(!app.filter_active);
+        assert_eq!(app.filter_query, "d"); // query kept
+    }
+
+    #[test]
+    fn filter_backspace_removes_char() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('/'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Char('b'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!(app.filter_query, "a");
+    }
+
+    // --- Cleanup flow ---
+
+    #[test]
+    fn c_with_selection_opens_confirm() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE); // select all
+        app.handle_key(KeyCode::Char('c'), KeyModifiers::NONE);
+        assert!(matches!(app.current_view, View::CleanupConfirm));
+    }
+
+    #[test]
+    fn c_without_selection_does_nothing() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('c'), KeyModifiers::NONE);
+        assert!(matches!(app.current_view, View::ModuleList));
+    }
+
+    #[test]
+    fn cleanup_n_cancels() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        let selected_count = app.selected_items.len();
+        app.handle_key(KeyCode::Char('c'), KeyModifiers::NONE);
+        assert!(matches!(app.current_view, View::CleanupConfirm));
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE);
+        assert!(matches!(app.current_view, View::ModuleList));
+        // Cancel preserves selection
+        assert_eq!(app.selected_items.len(), selected_count);
+    }
+
+    // --- Detail view selection ---
+
+    #[test]
+    fn detail_space_toggles_item() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE); // enter detail
+        assert!(matches!(app.current_view, View::ModuleDetail(_)));
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert_eq!(app.selected_items.len(), 1);
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert!(app.selected_items.is_empty());
+    }
+
+    #[test]
+    fn detail_backspace_goes_back() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(matches!(app.current_view, View::ModuleDetail(_)));
+        app.handle_key(KeyCode::Backspace, KeyModifiers::NONE);
+        assert!(matches!(app.current_view, View::ModuleList));
+    }
+
+    // --- matches_filter ---
+
+    #[test]
+    fn matches_filter_empty_query() {
+        assert!(matches_filter("anything", ""));
+    }
+
+    #[test]
+    fn matches_filter_case_insensitive() {
+        assert!(matches_filter("Docker", "docker"));
+        assert!(matches_filter("docker", "DOCK"));
+    }
+
+    #[test]
+    fn matches_filter_no_match() {
+        assert!(!matches_filter("docker", "npm"));
+    }
+
+    // --- Ctrl+N/P emacs bindings ---
+
+    #[test]
+    fn ctrl_n_moves_down() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::CONTROL);
+        assert_eq!(app.selected_index, 1);
+    }
+
+    #[test]
+    fn ctrl_p_moves_up() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert_eq!(app.selected_index, 0);
+    }
+
+    // --- Module list sort/filter logic ---
+
+    #[test]
+    fn module_list_sorted_excludes_zero_size() {
+        let mut m = make_module("empty", vec![]);
+        m.total_size = Some(0);
+        let app = App::new_for_test(vec![m]);
+        let sorted = crate::tui::views::module_list::sorted_module_indices(&app);
+        assert!(sorted.is_empty()); // 0 B modules excluded from navigation
+    }
+
+    #[test]
+    fn module_list_sorted_respects_filter() {
+        let mut app = make_test_app();
+        app.filter_query = "dock".to_string();
+        let sorted = crate::tui::views::module_list::sorted_module_indices(&app);
+        assert_eq!(sorted.len(), 1);
+    }
+
+    // --- Cleanup confirm ---
+
+    #[test]
+    fn collect_selected_items_sorted_by_size() {
+        let mut app = make_test_app();
+        // Select all items
+        for ms in &app.modules {
+            for item in &ms.items {
+                app.selected_items.insert(item.path.clone());
+            }
+        }
+        let items = crate::tui::views::cleanup_confirm::collect_selected_items(&app);
+        assert_eq!(items.len(), 3);
+        // Should be sorted by size descending
+        let sizes: Vec<Option<u64>> = items.iter().map(|i| i.2).collect();
+        for w in sizes.windows(2) {
+            assert!(w[0] >= w[1]);
+        }
+    }
 }

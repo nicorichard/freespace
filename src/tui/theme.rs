@@ -24,16 +24,16 @@ impl Default for Theme {
         // (Terminal.app, iTerm2, Alacritty, Kitty, WezTerm)
         Self {
             background: Color::Reset,
-            foreground: Color::Indexed(252),       // light gray
-            border: Color::Indexed(240),           // mid gray
-            selected_bg: Color::Indexed(236),      // dark gray highlight
-            selected_fg: Color::Indexed(255),      // bright white
-            header_fg: Color::Indexed(75),         // steel blue
+            foreground: Color::Indexed(252),  // light gray
+            border: Color::Indexed(240),      // mid gray
+            selected_bg: Color::Indexed(236), // dark gray highlight
+            selected_fg: Color::Indexed(255), // bright white
+            header_fg: Color::Indexed(75),    // steel blue
             header_bg: Color::Reset,
-            size_fg: Color::Indexed(222),          // light gold/yellow
-            error_fg: Color::Indexed(196),         // red
-            warning_fg: Color::Indexed(214),       // orange
-            status_loading: Color::Indexed(75),    // blue (in progress)
+            size_fg: Color::Indexed(222),       // light gold/yellow
+            error_fg: Color::Indexed(196),      // red
+            warning_fg: Color::Indexed(214),    // orange
+            status_loading: Color::Indexed(75), // blue (in progress)
         }
     }
 }
@@ -72,7 +72,9 @@ impl Theme {
 
     /// Style for error messages and indicators.
     pub fn style_error(&self) -> Style {
-        Style::default().fg(self.error_fg).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(self.error_fg)
+            .add_modifier(Modifier::BOLD)
     }
 
     /// Style for warning messages and indicators.
@@ -84,5 +86,4 @@ impl Theme {
     pub fn style_status_loading(&self) -> Style {
         Style::default().fg(self.status_loading)
     }
-
 }

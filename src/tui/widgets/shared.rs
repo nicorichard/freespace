@@ -36,3 +36,53 @@ pub fn checkbox_str(state: &CheckState) -> &'static str {
         CheckState::Partial => "[~]",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn module_icon_xcode() {
+        assert_eq!(module_icon("Xcode Derived Data"), "\u{1f528}");
+    }
+
+    #[test]
+    fn module_icon_npm() {
+        assert_eq!(module_icon("npm-cache"), "\u{1f4e6}");
+    }
+
+    #[test]
+    fn module_icon_docker() {
+        assert_eq!(module_icon("Docker"), "\u{1f433}");
+    }
+
+    #[test]
+    fn module_icon_homebrew() {
+        assert_eq!(module_icon("Homebrew"), "\u{1f37a}");
+    }
+
+    #[test]
+    fn module_icon_cache_generic() {
+        assert_eq!(module_icon("pip-cache"), "\u{1f5c2}\u{fe0f}");
+    }
+
+    #[test]
+    fn module_icon_unknown() {
+        assert_eq!(module_icon("something-random"), "\u{1f4c1}");
+    }
+
+    #[test]
+    fn checkbox_none() {
+        assert_eq!(checkbox_str(&CheckState::None), "[ ]");
+    }
+
+    #[test]
+    fn checkbox_all() {
+        assert_eq!(checkbox_str(&CheckState::All), "[x]");
+    }
+
+    #[test]
+    fn checkbox_partial() {
+        assert_eq!(checkbox_str(&CheckState::Partial), "[~]");
+    }
+}

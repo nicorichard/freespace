@@ -1,0 +1,9 @@
+name = "alpha-module"
+version = "1.0.0"
+description = "Alpha test module"
+author = "tester"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "~/alpha-cache"
+description = "Alpha cache"

@@ -1,12 +1,11 @@
-mod app;
-mod config;
-mod core;
-mod module;
-mod tui;
-
 use std::fs;
 
 use clap::{Parser, Subcommand};
+
+use freespace::app;
+use freespace::config;
+use freespace::module;
+use freespace::tui;
 
 /// Interactive terminal interface for browsing and cleaning disk space consumers.
 #[derive(Parser)]
@@ -26,8 +25,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Scan for disk space consumers and report results
-    Scan,
     /// Manage freespace modules
     Module {
         #[command(subcommand)]
@@ -75,9 +72,6 @@ async fn main() -> anyhow::Result<()> {
             // Restore terminal on normal exit
             tui::restore()?;
         }
-        Some(Command::Scan) => {
-            println!("scan: not yet implemented");
-        }
         Some(Command::Module { command }) => {
             let modules_dir = config::default_modules_dir()
                 .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
@@ -89,7 +83,11 @@ async fn main() -> anyhow::Result<()> {
                     match module::installer::install(&source, &modules_dir) {
                         Ok(results) => {
                             for r in &results {
-                                let action = if r.was_upgrade { "Updated" } else { "Installed" };
+                                let action = if r.was_upgrade {
+                                    "Updated"
+                                } else {
+                                    "Installed"
+                                };
                                 println!(
                                     "  {} {} v{} -> {}",
                                     action,
@@ -98,10 +96,7 @@ async fn main() -> anyhow::Result<()> {
                                     r.installed_to.display()
                                 );
                             }
-                            println!(
-                                "\n{} module(s) installed successfully.",
-                                results.len()
-                            );
+                            println!("\n{} module(s) installed successfully.", results.len());
                         }
                         Err(e) => {
                             eprintln!("Error: {}", e);
@@ -159,7 +154,7 @@ fn cmd_list(modules_dir: &std::path::Path) {
         let source = module::installer::read_source_info(&path);
 
         if !found {
-            println!("{:<20} {:<10} {}", "NAME", "VERSION", "SOURCE");
+            println!("{:<20} {:<10} SOURCE", "NAME", "VERSION");
             found = true;
         }
 
@@ -200,10 +195,7 @@ fn cmd_inspect(modules_dir: &std::path::Path, name: &str) -> anyhow::Result<()> 
 
     println!("Targets:");
     for target in &module.targets {
-        let desc = target
-            .description
-            .as_deref()
-            .unwrap_or("(no description)");
+        let desc = target.description.as_deref().unwrap_or("(no description)");
         if let Some(ref path) = target.path {
             println!("  {} - {}", path, desc);
         } else if let Some(ref name) = target.name {

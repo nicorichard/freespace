@@ -7,16 +7,22 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
 use crate::app::{matches_filter, App, ModuleStatus, ScanStatus};
-use crate::tui::widgets::{checkbox_str, format_size, format_size_or_placeholder, module_icon, CheckState};
+use crate::tui::widgets::{
+    checkbox_str, format_size, format_size_or_placeholder, module_icon, CheckState,
+};
 
 /// Check whether the module at the given index uses only global (path-based) targets.
 fn is_global(app: &App, idx: usize) -> bool {
-    app.modules[idx].module.targets.iter().all(|t| t.path.is_some())
+    app.modules[idx]
+        .module
+        .targets
+        .iter()
+        .all(|t| t.path.is_some())
 }
 
 /// Sort module indices: global first, then local; by size descending within
 /// each section. 0 B modules are pushed to the bottom.
-fn sort_modules(app: &App, indices: &mut Vec<usize>) {
+fn sort_modules(app: &App, indices: &mut [usize]) {
     indices.sort_by(|&a, &b| {
         let a_global = is_global(app, a);
         let b_global = is_global(app, b);
@@ -82,7 +88,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Title bar
-            Constraint::Min(1),   // Content
+            Constraint::Min(1),    // Content
             Constraint::Length(1), // Status bar
         ])
         .split(area);
@@ -93,7 +99,10 @@ pub fn render(app: &App, frame: &mut Frame) {
 }
 
 /// Spinner characters that cycle during scanning.
-const SPINNER_CHARS: &[char] = &['\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}', '\u{2827}', '\u{2807}', '\u{280f}'];
+const SPINNER_CHARS: &[char] = &[
+    '\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}', '\u{2827}',
+    '\u{2807}', '\u{280f}',
+];
 
 fn render_title_bar(app: &App, frame: &mut Frame, area: Rect) {
     let total: u64 = app.modules.iter().filter_map(|m| m.total_size).sum();
@@ -101,9 +110,11 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect) {
     let title_spans = match &app.scan_status {
         ScanStatus::Scanning => {
             let total_modules = app.modules.len();
-            let completed_modules = app.modules.iter().filter(|m| {
-                matches!(m.status, ModuleStatus::Ready | ModuleStatus::Error(_))
-            }).count();
+            let completed_modules = app
+                .modules
+                .iter()
+                .filter(|m| matches!(m.status, ModuleStatus::Ready | ModuleStatus::Error(_)))
+                .count();
 
             let spinner = SPINNER_CHARS[app.tick_count % SPINNER_CHARS.len()];
             let progress_text = format!(
@@ -115,22 +126,13 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect) {
             if any_known {
                 vec![
                     Span::styled(" Freespace ", app.theme.style_header()),
-                    Span::styled(
-                        progress_text,
-                        app.theme.style_status_loading(),
-                    ),
-                    Span::styled(
-                        format!(" {} ", format_size(total)),
-                        app.theme.style_size(),
-                    ),
+                    Span::styled(progress_text, app.theme.style_status_loading()),
+                    Span::styled(format!(" {} ", format_size(total)), app.theme.style_size()),
                 ]
             } else {
                 vec![
                     Span::styled(" Freespace ", app.theme.style_header()),
-                    Span::styled(
-                        progress_text,
-                        app.theme.style_status_loading(),
-                    ),
+                    Span::styled(progress_text, app.theme.style_status_loading()),
                 ]
             }
         }
@@ -147,12 +149,11 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect) {
         }
     };
 
-    let title = Paragraph::new(Line::from(title_spans))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(app.theme.style_border()),
-        );
+    let title = Paragraph::new(Line::from(title_spans)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(app.theme.style_border()),
+    );
     frame.render_widget(title, area);
 }
 
@@ -251,7 +252,11 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
         let icon = module_icon(&ms.module.name);
         let is_empty = ms.total_size == Some(0);
         let dim_style = app.theme.style_border(); // mid-gray for 0 B modules
-        let text_style = if is_empty { dim_style } else { app.theme.style_normal() };
+        let text_style = if is_empty {
+            dim_style
+        } else {
+            app.theme.style_normal()
+        };
 
         // Checkbox: compute selection state for this module
         let check_state = if ms.items.is_empty() {
@@ -270,8 +275,7 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
                 CheckState::Partial
             }
         };
-        let checkbox_cell =
-            Cell::from(Span::styled(checkbox_str(&check_state), text_style));
+        let checkbox_cell = Cell::from(Span::styled(checkbox_str(&check_state), text_style));
 
         // Name cell with icon (no status emoji)
         let name_cell = Cell::from(Line::from(vec![
@@ -280,18 +284,27 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
         ]));
 
         // Items count
-        let items_cell = Cell::from(Span::styled(format!("{} items", ms.items.len()), text_style));
+        let items_cell = Cell::from(Span::styled(
+            format!("{} items", ms.items.len()),
+            text_style,
+        ));
 
         // Size cell with appropriate styling
         let size_cell = match &ms.status {
-            ModuleStatus::Loading | ModuleStatus::Discovering => {
-                Cell::from(Span::styled("calculating...", app.theme.style_status_loading()))
-            }
-            ModuleStatus::Error(e) => {
-                Cell::from(Span::styled(format!("\u{26a0} {}", e), app.theme.style_error()))
-            }
+            ModuleStatus::Loading | ModuleStatus::Discovering => Cell::from(Span::styled(
+                "calculating...",
+                app.theme.style_status_loading(),
+            )),
+            ModuleStatus::Error(e) => Cell::from(Span::styled(
+                format!("\u{26a0} {}", e),
+                app.theme.style_error(),
+            )),
             ModuleStatus::Ready => {
-                let size_style = if is_empty { dim_style } else { app.theme.style_size() };
+                let size_style = if is_empty {
+                    dim_style
+                } else {
+                    app.theme.style_size()
+                };
                 Cell::from(Span::styled(
                     format_size_or_placeholder(ms.total_size),
                     size_style,
@@ -299,12 +312,17 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
             }
         };
 
-        rows.push(Row::new(vec![checkbox_cell, name_cell, items_cell, size_cell]));
+        rows.push(Row::new(vec![
+            checkbox_cell,
+            name_cell,
+            items_cell,
+            size_cell,
+        ]));
     }
 
     let widths = [
         Constraint::Length(5),  // Checkbox
-        Constraint::Min(30),   // Name
+        Constraint::Min(30),    // Name
         Constraint::Length(12), // Items
         Constraint::Length(16), // Size
     ];
@@ -322,6 +340,12 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
     let mut state = TableState::default();
     state.select(Some(visual_selected));
     frame.render_stateful_widget(table, area, &mut state);
+}
+
+/// Sort module indices for testing visibility.
+#[cfg(test)]
+pub fn all_sorted_module_indices_for_test(app: &App) -> Vec<usize> {
+    all_sorted_module_indices(app)
 }
 
 fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
@@ -342,10 +366,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
                 format!(" filter: \"{}\" ({}/{})  ", app.filter_query, shown, total),
                 app.theme.style_size(),
             ),
-            Span::styled(
-                "/ filter  Esc clear",
-                app.theme.style_normal(),
-            ),
+            Span::styled("/ filter  Esc clear", app.theme.style_normal()),
         ])
     } else {
         // Default status bar
@@ -356,4 +377,110 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
     };
     let status = Paragraph::new(line);
     frame.render_widget(status, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{Item, ItemType, ModuleState, ModuleStatus};
+    use crate::module::manifest::{Module, Target};
+    use std::path::PathBuf;
+
+    fn make_module(name: &str, size: u64) -> ModuleState {
+        let module = Module {
+            name: name.to_string(),
+            version: "1.0.0".to_string(),
+            description: "test".to_string(),
+            author: "tester".to_string(),
+            platforms: vec!["macos".to_string()],
+            targets: vec![Target {
+                path: Some("~/test".to_string()),
+                name: None,
+                indicator: None,
+                description: None,
+            }],
+        };
+        ModuleState {
+            module,
+            items: vec![Item {
+                name: "item".to_string(),
+                path: PathBuf::from("/tmp/item"),
+                size: Some(size),
+                item_type: ItemType::Directory,
+            }],
+            total_size: Some(size),
+            status: ModuleStatus::Ready,
+        }
+    }
+
+    #[test]
+    fn sorted_excludes_zero_size() {
+        let m = ModuleState {
+            module: Module {
+                name: "empty".to_string(),
+                version: "1.0.0".to_string(),
+                description: "test".to_string(),
+                author: "tester".to_string(),
+                platforms: vec!["macos".to_string()],
+                targets: vec![Target {
+                    path: Some("~/x".to_string()),
+                    name: None,
+                    indicator: None,
+                    description: None,
+                }],
+            },
+            items: vec![],
+            total_size: Some(0),
+            status: ModuleStatus::Ready,
+        };
+        let app = App::new_for_test(vec![m]);
+        let sorted = sorted_module_indices(&app);
+        assert!(sorted.is_empty());
+    }
+
+    #[test]
+    fn sorted_by_size_descending() {
+        let app = App::new_for_test(vec![
+            make_module("small", 1_000),
+            make_module("large", 1_000_000),
+            make_module("medium", 100_000),
+        ]);
+        let sorted = sorted_module_indices(&app);
+        assert_eq!(sorted.len(), 3);
+        // Largest first
+        assert_eq!(app.modules[sorted[0]].total_size, Some(1_000_000));
+        assert_eq!(app.modules[sorted[1]].total_size, Some(100_000));
+        assert_eq!(app.modules[sorted[2]].total_size, Some(1_000));
+    }
+
+    #[test]
+    fn sorted_respects_filter() {
+        let mut app = App::new_for_test(vec![
+            make_module("docker", 1_000_000),
+            make_module("npm-cache", 500_000),
+        ]);
+        app.filter_query = "dock".to_string();
+        let sorted = sorted_module_indices(&app);
+        assert_eq!(sorted.len(), 1);
+        assert_eq!(app.modules[sorted[0]].module.name, "docker");
+    }
+
+    #[test]
+    fn render_does_not_panic_empty_modules() {
+        let app = App::new_for_test(vec![]);
+        let backend = ratatui::backend::TestBackend::new(100, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(&app, frame)).unwrap();
+    }
+
+    #[test]
+    fn render_does_not_panic_with_modules() {
+        let app = App::new_for_test(vec![
+            make_module("docker", 5_000_000_000),
+            make_module("npm-cache", 1_000_000_000),
+        ]);
+        let backend = ratatui::backend::TestBackend::new(100, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(&app, frame)).unwrap();
+    }
 }
