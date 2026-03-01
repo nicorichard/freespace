@@ -8,6 +8,9 @@ use ratatui::Frame;
 use crate::app::{matches_filter, App, ItemType, ModuleStatus};
 use crate::tui::widgets::{checkbox_str, format_size, format_size_or_placeholder, module_icon, CheckState};
 
+/// Spinner characters that cycle during loading.
+const SPINNER_CHARS: &[char] = &['\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}', '\u{2827}', '\u{2807}', '\u{280f}'];
+
 /// Compute item indices sorted by size descending.
 /// Items with known sizes sort before those still calculating (None).
 pub fn sorted_item_indices(app: &App, module_idx: usize) -> Vec<usize> {
@@ -110,6 +113,27 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
         };
         let content = Paragraph::new(msg)
             .style(app.theme.style_normal())
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(app.theme.style_border()),
+            );
+        frame.render_widget(content, area);
+        return;
+    }
+
+    // When drilled in, show a loading indicator until all item sizes are known
+    if drilled && items.iter().any(|item| item.size.is_none()) {
+        let sized = items.iter().filter(|i| i.size.is_some()).count();
+        let total = items.len();
+        let spinner = SPINNER_CHARS[app.tick_count % SPINNER_CHARS.len()];
+        let loading_text = format!(
+            "{} Calculating sizes... {}/{}",
+            spinner, sized, total
+        );
+        let content = Paragraph::new(loading_text)
+            .style(app.theme.style_status_loading())
+            .alignment(ratatui::layout::Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
