@@ -1,4 +1,4 @@
-// Module installation from GitHub repositories.
+// Module installation from GitHub repositories and local paths.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,12 +15,14 @@ pub enum InstallError {
     GitNotFound,
     #[error("git clone failed: {0}")]
     CloneFailed(String),
-    #[error("no modules found in repository")]
+    #[error("no modules found in source")]
     NoModulesFound,
-    #[error("module '{name}' not found in repository. Available: {available}")]
+    #[error("module '{name}' not found in source. Available: {available}")]
     ModuleNotInRepo { name: String, available: String },
     #[error("failed to parse module.toml in '{path}': {reason}")]
     ManifestParseError { path: String, reason: String },
+    #[error("local path does not exist: {0}")]
+    PathNotFound(String),
     #[error("user cancelled installation")]
     Cancelled,
     #[error("{0}")]
@@ -36,9 +38,9 @@ pub struct InstallResult {
     pub was_upgrade: bool,
 }
 
-/// Layout of a cloned repository.
+/// Layout of a source directory.
 enum RepoLayout {
-    /// module.toml at the repo root
+    /// module.toml at the root
     SingleModule { module: Module },
     /// Subdirectories each containing module.toml
     MultiModule {
@@ -53,10 +55,21 @@ pub fn install(source_str: &str, modules_dir: &Path) -> Result<Vec<InstallResult
     let source = SourceIdentifier::parse(source_str)
         .map_err(|e| InstallError::Other(anyhow::anyhow!("{}", e)))?;
 
+    match &source {
+        SourceIdentifier::GitHub { .. } => install_from_github(&source, modules_dir),
+        SourceIdentifier::Local { path } => install_from_local(&source, path, modules_dir),
+    }
+}
+
+/// Install from a GitHub repository: clone, install, cleanup.
+fn install_from_github(
+    source: &SourceIdentifier,
+    modules_dir: &Path,
+) -> Result<Vec<InstallResult>, InstallError> {
     check_git_available()?;
 
-    let (temp_dir, commit_sha) = clone_repo(&source)?;
-    let result = install_from_clone(&source, &temp_dir, &commit_sha, modules_dir);
+    let (temp_dir, commit_sha) = clone_repo(source)?;
+    let result = install_from_dir(source, &temp_dir, &Some(commit_sha), modules_dir);
 
     // Best-effort cleanup
     let _ = fs::remove_dir_all(&temp_dir);
@@ -64,38 +77,147 @@ pub fn install(source_str: &str, modules_dir: &Path) -> Result<Vec<InstallResult
     result
 }
 
-/// Core installation logic after cloning.
-fn install_from_clone(
+/// Install from a local directory path by creating a symlink.
+///
+/// This makes local installs behave like a "dev link" — changes to the source
+/// directory are immediately reflected without reinstalling.
+fn install_from_local(
     source: &SourceIdentifier,
-    repo_dir: &Path,
-    commit_sha: &str,
+    path: &Path,
     modules_dir: &Path,
 ) -> Result<Vec<InstallResult>, InstallError> {
-    let layout = detect_layout(repo_dir)?;
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| InstallError::Other(anyhow::anyhow!("failed to get cwd: {}", e)))?
+            .join(path)
+    };
+
+    if !resolved.exists() {
+        return Err(InstallError::PathNotFound(resolved.display().to_string()));
+    }
+
+    let layout = detect_layout(&resolved)?;
 
     match layout {
         RepoLayout::SingleModule { module } => {
-            let source_info = make_source_info(source, commit_sha, None);
-            let dir_name = &source.repo;
-            let dest = modules_dir.join(dir_name);
-            let result = install_module_dir(repo_dir, &dest, &source_info, &module)?;
-            Ok(vec![result])
+            let dir_name = source.default_dir_name();
+            let dest = modules_dir.join(&dir_name);
+            symlink_module(&resolved, &dest)?;
+            Ok(vec![InstallResult {
+                name: module.name,
+                version: module.version,
+                installed_to: dest,
+                was_upgrade: false,
+            }])
         }
         RepoLayout::MultiModule { modules } => {
-            // If a specific module was requested, install just that one
-            if let Some(ref requested) = source.module_path {
+            if let Some(requested) = source.module_path() {
                 let (dir_name, module) = modules
                     .into_iter()
                     .find(|(name, _)| name == requested)
                     .ok_or_else(|| {
-                        let available = modules_available_names(repo_dir);
+                        let available = modules_available_names(&resolved);
                         InstallError::ModuleNotInRepo {
                             name: requested.clone(),
                             available,
                         }
                     })?;
 
-                let src = repo_dir.join(&dir_name);
+                let src = resolved.join(&dir_name);
+                let dest = modules_dir.join(&dir_name);
+                symlink_module(&src, &dest)?;
+                Ok(vec![InstallResult {
+                    name: module.name,
+                    version: module.version,
+                    installed_to: dest,
+                    was_upgrade: false,
+                }])
+            } else {
+                let selected = prompt_module_selection(&modules)?;
+                if selected.is_empty() {
+                    return Err(InstallError::Cancelled);
+                }
+
+                let mut results = Vec::new();
+                for idx in selected {
+                    let (dir_name, module) = &modules[idx];
+                    let src = resolved.join(dir_name);
+                    let dest = modules_dir.join(dir_name);
+                    symlink_module(&src, &dest)?;
+                    results.push(InstallResult {
+                        name: module.name.clone(),
+                        version: module.version.clone(),
+                        installed_to: dest,
+                        was_upgrade: false,
+                    });
+                }
+                Ok(results)
+            }
+        }
+    }
+}
+
+/// Create a symlink from dest -> src, removing any existing dest first.
+fn symlink_module(src: &Path, dest: &Path) -> Result<(), InstallError> {
+    if dest.exists() || dest.symlink_metadata().is_ok() {
+        if dest.is_dir() && !dest.symlink_metadata().map_or(false, |m| m.is_symlink()) {
+            fs::remove_dir_all(dest)
+        } else {
+            fs::remove_file(dest)
+        }
+        .map_err(|e| {
+            InstallError::Other(anyhow::anyhow!(
+                "failed to remove existing module at {}: {}",
+                dest.display(),
+                e
+            ))
+        })?;
+    }
+
+    std::os::unix::fs::symlink(src, dest).map_err(|e| {
+        InstallError::Other(anyhow::anyhow!(
+            "failed to symlink {} -> {}: {}",
+            dest.display(),
+            src.display(),
+            e
+        ))
+    })
+}
+
+/// Core installation logic from a source directory (used for GitHub clones).
+fn install_from_dir(
+    source: &SourceIdentifier,
+    source_dir: &Path,
+    commit_sha: &Option<String>,
+    modules_dir: &Path,
+) -> Result<Vec<InstallResult>, InstallError> {
+    let layout = detect_layout(source_dir)?;
+
+    match layout {
+        RepoLayout::SingleModule { module } => {
+            let source_info = make_source_info(source, commit_sha, None);
+            let dir_name = source.default_dir_name();
+            let dest = modules_dir.join(&dir_name);
+            let result = install_module_dir(source_dir, &dest, &source_info, &module)?;
+            Ok(vec![result])
+        }
+        RepoLayout::MultiModule { modules } => {
+            // If a specific module was requested, install just that one
+            if let Some(requested) = source.module_path() {
+                let (dir_name, module) = modules
+                    .into_iter()
+                    .find(|(name, _)| name == requested)
+                    .ok_or_else(|| {
+                        let available = modules_available_names(source_dir);
+                        InstallError::ModuleNotInRepo {
+                            name: requested.clone(),
+                            available,
+                        }
+                    })?;
+
+                let src = source_dir.join(&dir_name);
                 let dest = modules_dir.join(&dir_name);
                 let source_info = make_source_info(source, commit_sha, Some(&dir_name));
                 let result = install_module_dir(&src, &dest, &source_info, &module)?;
@@ -110,7 +232,7 @@ fn install_from_clone(
                 let mut results = Vec::new();
                 for idx in selected {
                     let (dir_name, module) = &modules[idx];
-                    let src = repo_dir.join(dir_name);
+                    let src = source_dir.join(dir_name);
                     let dest = modules_dir.join(dir_name);
                     let source_info = make_source_info(source, commit_sha, Some(dir_name));
                     let result = install_module_dir(&src, &dest, &source_info, module)?;
@@ -122,9 +244,9 @@ fn install_from_clone(
     }
 }
 
-/// Helper to collect available module names from a repo dir (for error messages).
-fn modules_available_names(repo_dir: &Path) -> String {
-    let entries = match fs::read_dir(repo_dir) {
+/// Helper to collect available module names from a dir (for error messages).
+fn modules_available_names(source_dir: &Path) -> String {
+    let entries = match fs::read_dir(source_dir) {
         Ok(e) => e,
         Err(_) => return String::from("(unable to list)"),
     };
@@ -174,11 +296,12 @@ fn check_git_available() -> Result<(), InstallError> {
 
 /// Clone a repository to a temporary directory. Returns (temp_dir_path, commit_sha).
 fn clone_repo(source: &SourceIdentifier) -> Result<(PathBuf, String), InstallError> {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "freespace-install-{}-{}",
-        source.owner,
-        source.repo
-    ));
+    let clone_url = source
+        .clone_url()
+        .ok_or_else(|| InstallError::CloneFailed("not a GitHub source".to_string()))?;
+
+    let dir_name = source.default_dir_name();
+    let temp_dir = std::env::temp_dir().join(format!("freespace-install-{}", dir_name));
 
     // Clean up any previous temp dir
     if temp_dir.exists() {
@@ -188,11 +311,11 @@ fn clone_repo(source: &SourceIdentifier) -> Result<(PathBuf, String), InstallErr
     let mut cmd = Command::new("git");
     cmd.arg("clone").arg("--depth").arg("1");
 
-    if let Some(ref git_ref) = source.git_ref {
+    if let Some(git_ref) = source.git_ref() {
         cmd.arg("--branch").arg(git_ref);
     }
 
-    cmd.arg(source.clone_url()).arg(&temp_dir);
+    cmd.arg(clone_url).arg(&temp_dir);
 
     let output = cmd.output().map_err(|e| {
         InstallError::CloneFailed(format!("failed to run git: {}", e))
@@ -215,10 +338,10 @@ fn clone_repo(source: &SourceIdentifier) -> Result<(PathBuf, String), InstallErr
     Ok((temp_dir, commit_sha))
 }
 
-/// Detect whether a cloned repo is a single-module or multi-module repo.
-fn detect_layout(repo_dir: &Path) -> Result<RepoLayout, InstallError> {
+/// Detect whether a directory is a single-module or multi-module layout.
+fn detect_layout(source_dir: &Path) -> Result<RepoLayout, InstallError> {
     // Check for root-level module.toml first
-    let root_manifest = repo_dir.join("module.toml");
+    let root_manifest = source_dir.join("module.toml");
     if root_manifest.exists() {
         let module = parse_manifest(&root_manifest)?;
         return Ok(RepoLayout::SingleModule { module });
@@ -226,8 +349,8 @@ fn detect_layout(repo_dir: &Path) -> Result<RepoLayout, InstallError> {
 
     // Check subdirectories for module.toml files
     let mut modules = Vec::new();
-    let entries = fs::read_dir(repo_dir)
-        .map_err(|e| InstallError::Other(anyhow::anyhow!("failed to read repo dir: {}", e)))?;
+    let entries = fs::read_dir(source_dir)
+        .map_err(|e| InstallError::Other(anyhow::anyhow!("failed to read source dir: {}", e)))?;
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -350,10 +473,10 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Build a SourceInfo from a source identifier and clone metadata.
+/// Build a SourceInfo from a source identifier and optional commit metadata.
 fn make_source_info(
     source: &SourceIdentifier,
-    commit_sha: &str,
+    commit_sha: &Option<String>,
     path: Option<&str>,
 ) -> SourceInfo {
     let now = SystemTime::now()
@@ -363,8 +486,8 @@ fn make_source_info(
 
     SourceInfo {
         repository: source.repository_string(),
-        git_ref: source.git_ref.clone(),
-        commit: commit_sha.to_string(),
+        git_ref: source.git_ref().cloned(),
+        commit: commit_sha.clone().unwrap_or_default(),
         path: path.map(|s| s.to_string()),
         installed_at: now,
     }

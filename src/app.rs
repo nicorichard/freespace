@@ -48,12 +48,14 @@ pub struct App {
     pub tick_count: usize,
     /// Stack of drill-in levels for directory exploration.
     pub drill_stack: Vec<DrillLevel>,
+    /// Saved selected_index for the module list so we can restore it on back navigation.
+    pub module_list_index: usize,
 }
 
 impl App {
     /// Create a new App with default state, load modules, and start scanning.
-    pub fn new(cli_module_dirs: Vec<String>) -> Self {
-        let modules = Self::load_modules(cli_module_dirs);
+    pub fn new(cli_module_dirs: Vec<String>, cli_search_dirs: Vec<String>) -> Self {
+        let (modules, search_dirs) = Self::load_modules_and_config(cli_module_dirs, cli_search_dirs);
 
         // Create channel for scan messages
         let (tx, rx) = mpsc::unbounded_channel();
@@ -65,7 +67,7 @@ impl App {
         let scan_status = if manifests.is_empty() {
             ScanStatus::Complete
         } else {
-            scanner::start_scan(manifests, tx.clone());
+            scanner::start_scan(manifests, tx.clone(), search_dirs);
             ScanStatus::Scanning
         };
 
@@ -86,11 +88,16 @@ impl App {
             scan_tx: tx,
             tick_count: 0,
             drill_stack: Vec::new(),
+            module_list_index: 0,
         }
     }
 
     /// Discover and load modules from all configured directories.
-    fn load_modules(cli_module_dirs: Vec<String>) -> Vec<ModuleState> {
+    /// Returns module states and expanded search_dirs paths.
+    fn load_modules_and_config(
+        cli_module_dirs: Vec<String>,
+        cli_search_dirs: Vec<String>,
+    ) -> (Vec<ModuleState>, Vec<PathBuf>) {
         // Load config file (warnings on failure, use defaults)
         let config = match AppConfig::load() {
             Ok(config) => config,
@@ -100,9 +107,31 @@ impl App {
             }
         };
 
-        // Merge extra dirs: config dirs first, then CLI dirs
+        // Merge module dirs: config dirs first, then CLI dirs
         let mut extra_dirs = config.module_dirs.clone();
         extra_dirs.extend(cli_module_dirs);
+
+        // Merge search dirs: config dirs first, then CLI dirs
+        let mut search_dir_strings = config.search_dirs.clone();
+        search_dir_strings.extend(cli_search_dirs);
+
+        // Expand tildes in search dirs
+        let search_dirs: Vec<PathBuf> = search_dir_strings
+            .iter()
+            .map(|s| {
+                if let Some(rest) = s.strip_prefix("~/") {
+                    if let Some(home) = dirs::home_dir() {
+                        return home.join(rest);
+                    }
+                } else if s == "~" {
+                    if let Some(home) = dirs::home_dir() {
+                        return home;
+                    }
+                }
+                PathBuf::from(s)
+            })
+            .filter(|p| p.is_dir())
+            .collect();
 
         let default_dir = crate::config::default_modules_dir();
 
@@ -114,7 +143,7 @@ impl App {
             eprintln!("warning: {}", warning);
         }
 
-        modules
+        let module_states = modules
             .into_iter()
             .map(|module| ModuleState {
                 module,
@@ -122,7 +151,9 @@ impl App {
                 total_size: None,
                 status: ModuleStatus::Loading,
             })
-            .collect()
+            .collect();
+
+        (module_states, search_dirs)
     }
 
     /// Run the main event loop: poll input -> update state -> render.
@@ -285,14 +316,31 @@ impl App {
             return;
         }
 
-        // If filter input is active, route to filter handler
+        // Normalize Emacs/terminal-style Ctrl keybindings to standard keys
+        let key = if modifiers.contains(KeyModifiers::CONTROL) {
+            match key {
+                KeyCode::Char('n') => KeyCode::Down,
+                KeyCode::Char('p') => KeyCode::Up,
+                _ => key,
+            }
+        } else {
+            key
+        };
+
+        // If filter input is active, let navigation keys pass through
+        // to the view handler (like fzf), handle everything else as filter input
         if self.filter_active {
-            self.handle_key_filter(key);
-            return;
+            match key {
+                KeyCode::Down | KeyCode::Up => {} // fall through to view handler
+                _ => {
+                    self.handle_key_filter(key);
+                    return;
+                }
+            }
         }
 
         // Global: q quits from any view (but not during filter input)
-        if key == KeyCode::Char('q') {
+        if key == KeyCode::Char('q') && !self.filter_active {
             self.should_quit = true;
             return;
         }
@@ -367,6 +415,7 @@ impl App {
             // Enter detail view for selected module
             KeyCode::Enter => {
                 if let Some(&module_idx) = sorted.get(self.selected_index) {
+                    self.module_list_index = self.selected_index;
                     self.clear_filter();
                     self.current_view = View::ModuleDetail(module_idx);
                     self.selected_index = 0;
@@ -539,7 +588,7 @@ impl App {
                 } else {
                     self.clear_filter();
                     self.current_view = View::ModuleList;
-                    self.selected_index = 0;
+                    self.selected_index = self.module_list_index;
                 }
             }
             // Backspace: pop drill stack if drilled in, else go back to module list
@@ -550,7 +599,7 @@ impl App {
                 } else {
                     self.clear_filter();
                     self.current_view = View::ModuleList;
-                    self.selected_index = 0;
+                    self.selected_index = self.module_list_index;
                 }
             }
             // Open help overlay

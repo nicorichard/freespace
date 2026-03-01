@@ -45,13 +45,15 @@ pub fn render(app: &App, frame: &mut Frame, module_idx: usize) {
         .constraints([
             Constraint::Length(3), // Title bar
             Constraint::Min(1),   // Content
+            Constraint::Length(1), // Path bar
             Constraint::Length(1), // Status bar
         ])
         .split(area);
 
     render_title_bar(app, frame, chunks[0], module_idx);
     render_items_table(app, frame, chunks[1], module_idx);
-    render_status_bar(app, frame, chunks[2], module_idx);
+    render_path_bar(app, frame, chunks[2], module_idx);
+    render_status_bar(app, frame, chunks[3], module_idx);
 }
 
 fn render_title_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
@@ -184,6 +186,20 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
     let mut state = TableState::default();
     state.select(Some(app.selected_index));
     frame.render_stateful_widget(table, area, &mut state);
+}
+
+fn render_path_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
+    let sorted = sorted_item_indices(app, module_idx);
+    let items = app.current_detail_items(module_idx);
+
+    let path_text = sorted
+        .get(app.selected_index)
+        .and_then(|&idx| items.get(idx))
+        .map(|item| format!(" {}", item.path.display()))
+        .unwrap_or_default();
+
+    let line = Line::from(Span::styled(path_text, app.theme.style_status_loading()));
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {

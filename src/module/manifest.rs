@@ -14,10 +14,13 @@ pub struct Module {
     pub targets: Vec<Target>,
 }
 
-/// A target path pattern that a module scans.
+/// A target that a module scans. Either a global target (has `path`) or a local
+/// target (has `name`) that is discovered by searching configured directories.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct Target {
-    pub path: String,
+    pub path: Option<String>,
+    pub name: Option<String>,
+    pub indicator: Option<String>,
     pub description: Option<String>,
 }

@@ -20,6 +20,7 @@ pub struct AppConfig {
     #[serde(skip)]
     pub dry_run: bool,
     pub module_dirs: Vec<String>,
+    pub search_dirs: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -27,6 +28,7 @@ impl Default for AppConfig {
         Self {
             dry_run: true,
             module_dirs: Vec::new(),
+            search_dirs: Vec::new(),
         }
     }
 }
