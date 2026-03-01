@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{matches_filter, App, ModuleStatus, ScanStatus, SortMode};
+use crate::app::{matches_filter, App, ModuleStatus, ScanStatus};
 use crate::tui::widgets::{checkbox_str, format_size, format_size_or_placeholder, module_icon, CheckState};
 
 /// Compute module indices sorted according to the current sort mode.
@@ -13,30 +13,16 @@ pub fn sorted_module_indices(app: &App) -> Vec<usize> {
     let mut indices: Vec<usize> = (0..app.modules.len())
         .filter(|&i| matches_filter(&app.modules[i].module.name, &app.filter_query))
         .collect();
-    match app.sort_mode {
-        SortMode::Default => {
-            // Insertion order — no sorting needed
+    indices.sort_by(|&a, &b| {
+        let size_a = app.modules[a].total_size;
+        let size_b = app.modules[b].total_size;
+        match (size_b, size_a) {
+            (Some(sb), Some(sa)) => sb.cmp(&sa),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.cmp(&b),
         }
-        SortMode::Alphabetical => {
-            indices.sort_by(|&a, &b| {
-                let name_a = app.modules[a].module.name.to_lowercase();
-                let name_b = app.modules[b].module.name.to_lowercase();
-                name_a.cmp(&name_b)
-            });
-        }
-        SortMode::SizeDesc => {
-            indices.sort_by(|&a, &b| {
-                let size_a = app.modules[a].total_size;
-                let size_b = app.modules[b].total_size;
-                match (size_b, size_a) {
-                    (Some(sb), Some(sa)) => sb.cmp(&sa),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => a.cmp(&b),
-                }
-            });
-        }
-    }
+    });
     indices
 }
 
@@ -126,6 +112,31 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
     if app.modules.is_empty() {
         let content = Paragraph::new("No modules loaded.")
             .style(app.theme.style_normal())
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(app.theme.style_border()),
+            );
+        frame.render_widget(content, area);
+        return;
+    }
+
+    // Show loading indicator during scan instead of a partially-sorted table
+    if matches!(app.scan_status, ScanStatus::Scanning) {
+        let total_modules = app.modules.len();
+        let completed_modules = app
+            .modules
+            .iter()
+            .filter(|m| matches!(m.status, ModuleStatus::Ready | ModuleStatus::Error(_)))
+            .count();
+        let spinner = SPINNER_CHARS[app.tick_count % SPINNER_CHARS.len()];
+        let loading_text = format!(
+            "{} Scanning... {}/{} modules",
+            spinner, completed_modules, total_modules
+        );
+        let content = Paragraph::new(loading_text)
+            .style(app.theme.style_status_loading())
+            .alignment(ratatui::layout::Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -239,12 +250,8 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
         ])
     } else {
         // Default status bar
-        let sort_label = app.sort_mode.label();
         Line::from(vec![Span::styled(
-            format!(
-                " \u{2191}/\u{2193} navigate  Space select  Enter details  s sort ({})  / filter  c clean  ? help  q quit ",
-                sort_label
-            ),
+            " \u{2191}/\u{2193} navigate  Space select  a all  n none  Enter details  / filter  c clean  ? help  q quit ",
             app.theme.style_normal(),
         )])
     };

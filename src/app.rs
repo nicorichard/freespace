@@ -32,8 +32,6 @@ pub struct App {
     pub previous_view: View,
     /// Whether the application should exit.
     pub should_quit: bool,
-    /// Sort mode for the module list.
-    pub sort_mode: SortMode,
     /// Whether the user is currently typing in the filter bar.
     pub filter_active: bool,
     /// Current filter text (empty = no filter).
@@ -80,7 +78,6 @@ impl App {
             theme: Theme::default(),
             previous_view: View::ModuleList,
             should_quit: false,
-            sort_mode: SortMode::Default,
             filter_active: false,
             filter_query: String::new(),
             filter_cursor: 0,
@@ -440,10 +437,31 @@ impl App {
                     }
                 }
             }
-            // Cycle sort mode
-            KeyCode::Char('s') => {
-                self.sort_mode = self.sort_mode.next();
-                self.selected_index = 0;
+            // Select all items across all visible (filtered) modules
+            KeyCode::Char('a') => {
+                for &module_idx in &sorted {
+                    let paths: Vec<PathBuf> = self.modules[module_idx]
+                        .items
+                        .iter()
+                        .map(|item| item.path.clone())
+                        .collect();
+                    for path in paths {
+                        self.selected_items.insert(path);
+                    }
+                }
+            }
+            // Deselect all items across all visible (filtered) modules
+            KeyCode::Char('n') => {
+                for &module_idx in &sorted {
+                    let paths: Vec<PathBuf> = self.modules[module_idx]
+                        .items
+                        .iter()
+                        .map(|item| item.path.clone())
+                        .collect();
+                    for path in paths {
+                        self.selected_items.remove(&path);
+                    }
+                }
             }
             // Open help overlay
             KeyCode::Char('?') => {
@@ -811,38 +829,6 @@ pub struct DrillLevel {
     pub path: PathBuf,
     pub items: Vec<Item>,
     pub parent_selected_index: usize,
-}
-
-/// Sort mode for the module list.
-#[derive(Clone, Copy, Default)]
-pub enum SortMode {
-    /// Insertion order (no sorting).
-    #[default]
-    Default,
-    /// Alphabetical by module name (case-insensitive).
-    Alphabetical,
-    /// Size descending (largest first).
-    SizeDesc,
-}
-
-impl SortMode {
-    /// Cycle to the next sort mode.
-    pub fn next(self) -> Self {
-        match self {
-            SortMode::Default => SortMode::Alphabetical,
-            SortMode::Alphabetical => SortMode::SizeDesc,
-            SortMode::SizeDesc => SortMode::Default,
-        }
-    }
-
-    /// Human-readable label for the status bar.
-    pub fn label(self) -> &'static str {
-        match self {
-            SortMode::Default => "default",
-            SortMode::Alphabetical => "a-z",
-            SortMode::SizeDesc => "size",
-        }
-    }
 }
 
 /// Case-insensitive substring match for filtering lists.
