@@ -65,9 +65,9 @@ impl SourceIdentifier {
         })
     }
 
-    /// HTTPS clone URL for the repository.
+    /// SSH clone URL for the repository.
     pub fn clone_url(&self) -> String {
-        format!("https://github.com/{}/{}.git", self.owner, self.repo)
+        format!("git@github.com:{}/{}.git", self.owner, self.repo)
     }
 
     /// The `github:owner/repo` string (without ref or module path).
