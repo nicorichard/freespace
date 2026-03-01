@@ -30,14 +30,6 @@ pub fn sorted_item_indices(app: &App, module_idx: usize) -> Vec<usize> {
 pub fn render(app: &App, frame: &mut Frame, module_idx: usize) {
     let area = frame.area();
 
-    // Minimum width check
-    if area.width < 80 {
-        let msg = Paragraph::new("Terminal too narrow. Please resize to at least 80 columns.")
-            .style(app.theme.style_warning());
-        frame.render_widget(msg, area);
-        return;
-    }
-
     // Bounds check
     if module_idx >= app.modules.len() {
         let msg = Paragraph::new("Module not found.")

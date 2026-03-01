@@ -47,14 +47,6 @@ pub fn sorted_module_indices(app: &App) -> Vec<usize> {
 pub fn render(app: &App, frame: &mut Frame) {
     let area = frame.area();
 
-    // Minimum width check
-    if area.width < 80 {
-        let msg = Paragraph::new("Terminal too narrow. Please resize to at least 80 columns.")
-            .style(app.theme.style_warning());
-        frame.render_widget(msg, area);
-        return;
-    }
-
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

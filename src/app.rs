@@ -113,7 +113,8 @@ impl App {
                         }
                     }
                     Event::Resize(_, _) => {
-                        // Re-render happens at the top of the next loop iteration
+                        // Immediate re-render on resize
+                        continue;
                     }
                     _ => {}
                 }
@@ -356,8 +357,25 @@ impl App {
         }
     }
 
+    /// Minimum terminal width required for rendering views.
+    const MIN_WIDTH: u16 = 80;
+
     /// Render the appropriate view based on current_view.
     fn render(&self, frame: &mut ratatui::Frame) {
+        let area = frame.area();
+
+        // Show a message if the terminal is too narrow
+        if area.width < Self::MIN_WIDTH {
+            let msg = ratatui::widgets::Paragraph::new(format!(
+                "Terminal too narrow ({}). Please resize to at least {} columns.",
+                area.width,
+                Self::MIN_WIDTH,
+            ))
+            .style(self.theme.style_warning());
+            frame.render_widget(msg, area);
+            return;
+        }
+
         match &self.current_view {
             View::ModuleList => self.render_module_list(frame),
             View::ModuleDetail(idx) => self.render_module_detail(frame, *idx),
