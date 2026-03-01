@@ -26,7 +26,6 @@ pub struct App {
     pub selected_index: usize,
     pub selected_items: HashSet<PathBuf>,
     pub scan_status: ScanStatus,
-    pub config: AppConfig,
     pub theme: Theme,
     /// View to return to when leaving an overlay (CleanupConfirm, Help).
     pub previous_view: View,
@@ -71,7 +70,6 @@ impl App {
             selected_index: 0,
             selected_items: HashSet::new(),
             scan_status,
-            config: AppConfig::default(),
             theme: Theme::default(),
             previous_view: View::ModuleList,
             should_quit: false,

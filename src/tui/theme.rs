@@ -16,8 +16,6 @@ pub struct Theme {
     pub error_fg: Color,
     pub warning_fg: Color,
     pub status_loading: Color,
-    pub status_ready: Color,
-    pub status_error: Color,
 }
 
 impl Default for Theme {
@@ -36,8 +34,6 @@ impl Default for Theme {
             error_fg: Color::Indexed(196),         // red
             warning_fg: Color::Indexed(214),       // orange
             status_loading: Color::Indexed(75),    // blue (in progress)
-            status_ready: Color::Indexed(114),     // green (done)
-            status_error: Color::Indexed(196),     // red (error)
         }
     }
 }
@@ -89,13 +85,4 @@ impl Theme {
         Style::default().fg(self.status_loading)
     }
 
-    /// Style for a ready/complete status indicator.
-    pub fn style_status_ready(&self) -> Style {
-        Style::default().fg(self.status_ready)
-    }
-
-    /// Style for an error status indicator.
-    pub fn style_status_error(&self) -> Style {
-        Style::default().fg(self.status_error)
-    }
 }
