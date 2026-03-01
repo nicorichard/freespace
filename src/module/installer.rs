@@ -76,7 +76,7 @@ fn install_from_clone(
     match layout {
         RepoLayout::SingleModule { module } => {
             let source_info = make_source_info(source, commit_sha, None);
-            let dir_name = &module.name;
+            let dir_name = &source.repo;
             let dest = modules_dir.join(dir_name);
             let result = install_module_dir(repo_dir, &dest, &source_info, &module)?;
             Ok(vec![result])
@@ -96,7 +96,7 @@ fn install_from_clone(
                     })?;
 
                 let src = repo_dir.join(&dir_name);
-                let dest = modules_dir.join(&module.name);
+                let dest = modules_dir.join(&dir_name);
                 let source_info = make_source_info(source, commit_sha, Some(&dir_name));
                 let result = install_module_dir(&src, &dest, &source_info, &module)?;
                 Ok(vec![result])
@@ -111,7 +111,7 @@ fn install_from_clone(
                 for idx in selected {
                     let (dir_name, module) = &modules[idx];
                     let src = repo_dir.join(dir_name);
-                    let dest = modules_dir.join(&module.name);
+                    let dest = modules_dir.join(dir_name);
                     let source_info = make_source_info(source, commit_sha, Some(dir_name));
                     let result = install_module_dir(&src, &dest, &source_info, module)?;
                     results.push(result);
@@ -145,7 +145,7 @@ fn modules_available_names(repo_dir: &Path) -> String {
 fn prompt_module_selection(modules: &[(String, Module)]) -> Result<Vec<usize>, InstallError> {
     let items: Vec<String> = modules
         .iter()
-        .map(|(dir_name, m)| format!("{} - {}", dir_name, m.description))
+        .map(|(_, m)| m.name.clone())
         .collect();
 
     let defaults: Vec<bool> = vec![true; items.len()];
