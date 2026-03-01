@@ -1,6 +1,7 @@
 // Module list view (main screen).
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
@@ -8,14 +9,42 @@ use ratatui::Frame;
 use crate::app::{matches_filter, App, ModuleStatus, ScanStatus};
 use crate::tui::widgets::{checkbox_str, format_size, format_size_or_placeholder, module_icon, CheckState};
 
-/// Compute module indices sorted according to the current sort mode.
-pub fn sorted_module_indices(app: &App) -> Vec<usize> {
-    let mut indices: Vec<usize> = (0..app.modules.len())
-        .filter(|&i| matches_filter(&app.modules[i].module.name, &app.filter_query))
-        .collect();
+/// Check whether the module at the given index uses only global (path-based) targets.
+fn is_global(app: &App, idx: usize) -> bool {
+    app.modules[idx].module.targets.iter().all(|t| t.path.is_some())
+}
+
+/// Sort module indices: global first, then local; by size descending within
+/// each section. 0 B modules are pushed to the bottom.
+fn sort_modules(app: &App, indices: &mut Vec<usize>) {
     indices.sort_by(|&a, &b| {
+        let a_global = is_global(app, a);
+        let b_global = is_global(app, b);
+
+        // Global before local
+        if a_global != b_global {
+            return if a_global {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+
         let size_a = app.modules[a].total_size;
         let size_b = app.modules[b].total_size;
+
+        // 0 B items sink to the bottom within their section
+        let a_empty = size_a == Some(0);
+        let b_empty = size_b == Some(0);
+        if a_empty != b_empty {
+            return if a_empty {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Less
+            };
+        }
+
+        // Sort by size descending
         match (size_b, size_a) {
             (Some(sb), Some(sa)) => sb.cmp(&sa),
             (Some(_), None) => std::cmp::Ordering::Less,
@@ -23,6 +52,25 @@ pub fn sorted_module_indices(app: &App) -> Vec<usize> {
             (None, None) => a.cmp(&b),
         }
     });
+}
+
+/// Navigable module indices — excludes 0 B modules so they are skipped
+/// during keyboard navigation and selection.
+pub fn sorted_module_indices(app: &App) -> Vec<usize> {
+    let mut indices: Vec<usize> = (0..app.modules.len())
+        .filter(|&i| matches_filter(&app.modules[i].module.name, &app.filter_query))
+        .filter(|&i| app.modules[i].total_size != Some(0))
+        .collect();
+    sort_modules(app, &mut indices);
+    indices
+}
+
+/// All module indices including 0 B — used for rendering the full list.
+fn all_sorted_module_indices(app: &App) -> Vec<usize> {
+    let mut indices: Vec<usize> = (0..app.modules.len())
+        .filter(|&i| matches_filter(&app.modules[i].module.name, &app.filter_query))
+        .collect();
+    sort_modules(app, &mut indices);
     indices
 }
 
@@ -146,62 +194,113 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
         return;
     }
 
-    let sorted = sorted_module_indices(app);
+    let all_sorted = all_sorted_module_indices(app);
+    let navigable = sorted_module_indices(app);
 
-    let rows: Vec<Row> = sorted
-        .iter()
-        .map(|&module_idx| {
-            let ms = &app.modules[module_idx];
-            let icon = module_icon(&ms.module.name);
+    // The currently selected module index (in app.modules), if any
+    let selected_module = navigable.get(app.selected_index).copied();
 
-            // Checkbox: compute selection state for this module
-            let check_state = if ms.items.is_empty() {
-                CheckState::None
-            } else {
-                let selected_count = ms
-                    .items
-                    .iter()
-                    .filter(|item| app.selected_items.contains(&item.path))
-                    .count();
-                if selected_count == 0 {
-                    CheckState::None
-                } else if selected_count == ms.items.len() {
-                    CheckState::All
-                } else {
-                    CheckState::Partial
-                }
-            };
-            let checkbox_cell =
-                Cell::from(Span::styled(checkbox_str(&check_state), app.theme.style_normal()));
+    // Determine section boundaries for Global / Local headers
+    let has_global = all_sorted.iter().any(|&idx| is_global(app, idx));
+    let has_local = all_sorted.iter().any(|&idx| !is_global(app, idx));
+    let first_local_pos = if has_local {
+        all_sorted.iter().position(|&idx| !is_global(app, idx))
+    } else {
+        None
+    };
 
-            // Name cell with icon (no status emoji)
-            let name_cell = Cell::from(Line::from(vec![
-                Span::raw(format!("{} ", icon)),
-                Span::styled(&ms.module.name, app.theme.style_normal()),
+    let header_style = app.theme.style_border().add_modifier(Modifier::BOLD);
+
+    // Build rows with section headers interspersed, tracking the visual row
+    // that corresponds to the selected module.
+    let mut rows: Vec<Row> = Vec::new();
+    let mut visual_selected: usize = 0;
+
+    for (pos, &module_idx) in all_sorted.iter().enumerate() {
+        // Insert "Global" header before the first global module
+        if pos == 0 && has_global && is_global(app, module_idx) {
+            rows.push(Row::new(vec![
+                Cell::from(""),
+                Cell::from(Span::styled(
+                    "\u{2500}\u{2500} Global \u{2500}\u{2500}",
+                    header_style,
+                )),
+                Cell::from(""),
+                Cell::from(""),
             ]));
+        }
+        // Insert "Local" header before the first local module
+        if Some(pos) == first_local_pos {
+            rows.push(Row::new(vec![
+                Cell::from(""),
+                Cell::from(Span::styled(
+                    "\u{2500}\u{2500} Local \u{2500}\u{2500}",
+                    header_style,
+                )),
+                Cell::from(""),
+                Cell::from(""),
+            ]));
+        }
 
-            // Items count
-            let items_cell = Cell::from(format!("{} items", ms.items.len()));
+        // Track which visual row is the selected module
+        if Some(module_idx) == selected_module {
+            visual_selected = rows.len();
+        }
 
-            // Size cell with appropriate styling
-            let size_cell = match &ms.status {
-                ModuleStatus::Loading | ModuleStatus::Discovering => {
-                    Cell::from(Span::styled("calculating...", app.theme.style_status_loading()))
-                }
-                ModuleStatus::Error(e) => {
-                    Cell::from(Span::styled(format!("\u{26a0} {}", e), app.theme.style_error()))
-                }
-                ModuleStatus::Ready => {
-                    Cell::from(Span::styled(
-                        format_size_or_placeholder(ms.total_size),
-                        app.theme.style_size(),
-                    ))
-                }
-            };
+        let ms = &app.modules[module_idx];
+        let icon = module_icon(&ms.module.name);
+        let is_empty = ms.total_size == Some(0);
+        let dim_style = app.theme.style_border(); // mid-gray for 0 B modules
+        let text_style = if is_empty { dim_style } else { app.theme.style_normal() };
 
-            Row::new(vec![checkbox_cell, name_cell, items_cell, size_cell])
-        })
-        .collect();
+        // Checkbox: compute selection state for this module
+        let check_state = if ms.items.is_empty() {
+            CheckState::None
+        } else {
+            let selected_count = ms
+                .items
+                .iter()
+                .filter(|item| app.selected_items.contains(&item.path))
+                .count();
+            if selected_count == 0 {
+                CheckState::None
+            } else if selected_count == ms.items.len() {
+                CheckState::All
+            } else {
+                CheckState::Partial
+            }
+        };
+        let checkbox_cell =
+            Cell::from(Span::styled(checkbox_str(&check_state), text_style));
+
+        // Name cell with icon (no status emoji)
+        let name_cell = Cell::from(Line::from(vec![
+            Span::styled(format!("{} ", icon), text_style),
+            Span::styled(&ms.module.name, text_style),
+        ]));
+
+        // Items count
+        let items_cell = Cell::from(Span::styled(format!("{} items", ms.items.len()), text_style));
+
+        // Size cell with appropriate styling
+        let size_cell = match &ms.status {
+            ModuleStatus::Loading | ModuleStatus::Discovering => {
+                Cell::from(Span::styled("calculating...", app.theme.style_status_loading()))
+            }
+            ModuleStatus::Error(e) => {
+                Cell::from(Span::styled(format!("\u{26a0} {}", e), app.theme.style_error()))
+            }
+            ModuleStatus::Ready => {
+                let size_style = if is_empty { dim_style } else { app.theme.style_size() };
+                Cell::from(Span::styled(
+                    format_size_or_placeholder(ms.total_size),
+                    size_style,
+                ))
+            }
+        };
+
+        rows.push(Row::new(vec![checkbox_cell, name_cell, items_cell, size_cell]));
+    }
 
     let widths = [
         Constraint::Length(5),  // Checkbox
@@ -221,7 +320,7 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
         .highlight_symbol("\u{25b6} ");
 
     let mut state = TableState::default();
-    state.select(Some(app.selected_index));
+    state.select(Some(visual_selected));
     frame.render_stateful_widget(table, area, &mut state);
 }
 
