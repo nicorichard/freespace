@@ -256,16 +256,7 @@ impl App {
     }
 
     fn render_cleanup_confirm(&self, frame: &mut ratatui::Frame) {
-        let area = frame.area();
-        let placeholder = Paragraph::new("Cleanup confirmation — not yet implemented. Press q to quit.")
-            .style(self.theme.style_normal())
-            .block(
-                Block::default()
-                    .title(" Cleanup Preview ")
-                    .borders(Borders::ALL)
-                    .border_style(self.theme.style_border()),
-            );
-        frame.render_widget(placeholder, area);
+        views::cleanup_confirm::render(self, frame);
     }
 
     fn render_help(&self, frame: &mut ratatui::Frame) {
