@@ -5,9 +5,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use tokio::sync::mpsc;
 
 use crate::config::AppConfig;
 use crate::core::cleaner;
+use crate::core::scanner::{self, ScanMessage};
 use crate::module::manager;
 use crate::module::manifest::Module;
 use crate::tui::theme::Theme;
@@ -30,23 +32,40 @@ pub struct App {
     pub previous_view: View,
     /// Whether the application should exit.
     pub should_quit: bool,
+    /// Receiver for scan messages from the background scanner.
+    scan_rx: mpsc::UnboundedReceiver<ScanMessage>,
 }
 
 impl App {
-    /// Create a new App with default state and load built-in modules.
+    /// Create a new App with default state, load built-in modules, and start scanning.
     pub fn new() -> Self {
         let modules = Self::load_modules();
+
+        // Create channel for scan messages
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        // Collect module manifests for the scanner
+        let manifests: Vec<Module> = modules.iter().map(|ms| ms.module.clone()).collect();
+
+        // Start background scan
+        let scan_status = if manifests.is_empty() {
+            ScanStatus::Complete
+        } else {
+            scanner::start_scan(manifests, tx);
+            ScanStatus::Scanning
+        };
 
         Self {
             modules,
             current_view: View::ModuleList,
             selected_index: 0,
             selected_items: HashSet::new(),
-            scan_status: ScanStatus::Idle,
+            scan_status,
             config: AppConfig::default(),
             theme: Theme::default(),
             previous_view: View::ModuleList,
             should_quit: false,
+            scan_rx: rx,
         }
     }
 
@@ -96,9 +115,44 @@ impl App {
                     _ => {}
                 }
             }
+
+            // Process any pending scan messages (non-blocking)
+            self.process_scan_messages();
         }
 
         Ok(())
+    }
+
+    /// Drain pending scan messages from the background scanner and update state.
+    fn process_scan_messages(&mut self) {
+        while let Ok(msg) = self.scan_rx.try_recv() {
+            match msg {
+                ScanMessage::ItemDiscovered { module_index, item } => {
+                    if let Some(ms) = self.modules.get_mut(module_index) {
+                        ms.status = ModuleStatus::Discovering;
+                        ms.items.push(item);
+                        // Recalculate total size from all items with known sizes
+                        let total: u64 = ms.items.iter().filter_map(|i| i.size).sum();
+                        ms.total_size = Some(total);
+                    }
+                }
+                ScanMessage::ModuleComplete { module_index } => {
+                    if let Some(ms) = self.modules.get_mut(module_index) {
+                        ms.status = ModuleStatus::Ready;
+                        let total: u64 = ms.items.iter().filter_map(|i| i.size).sum();
+                        ms.total_size = Some(total);
+                    }
+                }
+                ScanMessage::ModuleError { module_index, error } => {
+                    if let Some(ms) = self.modules.get_mut(module_index) {
+                        ms.status = ModuleStatus::Error(error);
+                    }
+                }
+                ScanMessage::ScanComplete => {
+                    self.scan_status = ScanStatus::Complete;
+                }
+            }
+        }
     }
 
     /// Dispatch key events based on the current view.
