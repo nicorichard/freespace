@@ -8,6 +8,23 @@ pub struct CleanupResult {
     pub failed: Vec<(PathBuf, String)>,
 }
 
+/// Move the given files and directories to the system trash, returning which succeeded and which failed.
+pub fn trash_items(paths: &[PathBuf]) -> CleanupResult {
+    let mut result = CleanupResult {
+        succeeded: Vec::new(),
+        failed: Vec::new(),
+    };
+
+    for path in paths {
+        match trash::delete(path) {
+            Ok(()) => result.succeeded.push(path.clone()),
+            Err(e) => result.failed.push((path.clone(), e.to_string())),
+        }
+    }
+
+    result
+}
+
 /// Delete the given files and directories, returning which succeeded and which failed.
 pub fn delete_items(paths: &[PathBuf]) -> CleanupResult {
     let mut result = CleanupResult {

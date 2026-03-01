@@ -6,6 +6,69 @@ use std::path::{Path, PathBuf};
 
 use crate::module::manifest::Module;
 
+/// Load modules from all configured directories.
+///
+/// Scans the default modules directory first (creating it if it doesn't exist),
+/// then scans each extra directory from config and CLI flags.
+/// Returns loaded modules and any warnings encountered.
+pub fn load_all_modules(
+    default_dir: Option<PathBuf>,
+    extra_dirs: &[String],
+) -> (Vec<Module>, Vec<String>) {
+    let mut all_modules = Vec::new();
+    let mut all_warnings = Vec::new();
+
+    // 1. Scan default directory (~/.config/freespace/modules/)
+    if let Some(dir) = default_dir {
+        if !dir.exists() {
+            if let Err(e) = fs::create_dir_all(&dir) {
+                all_warnings.push(format!(
+                    "Could not create default modules directory {}: {}",
+                    dir.display(),
+                    e
+                ));
+            }
+        }
+
+        if dir.is_dir() {
+            let (modules, warnings) = load_builtin_modules(&dir);
+            all_modules.extend(modules);
+            all_warnings.extend(warnings);
+        }
+    }
+
+    // 2. Scan extra directories (from config + CLI)
+    for dir_str in extra_dirs {
+        let dir = expand_tilde(dir_str);
+        if !dir.is_dir() {
+            all_warnings.push(format!(
+                "Module directory does not exist: {}",
+                dir.display()
+            ));
+            continue;
+        }
+        let (modules, warnings) = load_builtin_modules(&dir);
+        all_modules.extend(modules);
+        all_warnings.extend(warnings);
+    }
+
+    (all_modules, all_warnings)
+}
+
+/// Expand a leading `~` or `~/` to the user's home directory.
+fn expand_tilde(path: &str) -> PathBuf {
+    if path == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home;
+        }
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
 /// Discover and load built-in modules from the modules/ directory.
 ///
 /// Scans the given directory for subdirectories containing a `module.toml` file,
@@ -82,25 +145,4 @@ fn current_platform() -> String {
         "windows" => "windows".to_string(),
         other => other.to_string(),
     }
-}
-
-/// Find the built-in modules directory relative to the executable or cwd.
-pub fn find_modules_dir() -> Option<PathBuf> {
-    // First, try relative to current working directory (development mode)
-    let cwd_modules = PathBuf::from("modules");
-    if cwd_modules.is_dir() {
-        return Some(cwd_modules);
-    }
-
-    // Try relative to the executable location
-    if let Ok(exe_path) = env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let exe_modules = exe_dir.join("modules");
-            if exe_modules.is_dir() {
-                return Some(exe_modules);
-            }
-        }
-    }
-
-    None
 }
