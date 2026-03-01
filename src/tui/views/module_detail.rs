@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
 use crate::app::{App, ModuleStatus};
-use crate::tui::widgets::{format_size, format_size_or_placeholder};
+use crate::tui::widgets::{checkbox_str, format_size, format_size_or_placeholder, module_icon, CheckState};
 
 /// Compute item indices sorted by size descending.
 /// Items with known sizes sort before those still calculating (None).
@@ -104,9 +104,13 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
             let item = &ms.items[item_idx];
 
             // Selection checkbox
-            let checked = app.selected_items.contains(&item.path);
-            let checkbox = if checked { "[x]" } else { "[ ]" };
-            let checkbox_cell = Cell::from(Span::styled(checkbox, app.theme.style_normal()));
+            let check_state = if app.selected_items.contains(&item.path) {
+                CheckState::All
+            } else {
+                CheckState::None
+            };
+            let checkbox_cell =
+                Cell::from(Span::styled(checkbox_str(&check_state), app.theme.style_normal()));
 
             // Item name
             let name_cell = Cell::from(Span::styled(&*item.name, app.theme.style_normal()));
@@ -157,22 +161,4 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
         app.theme.style_normal(),
     )]));
     frame.render_widget(status, area);
-}
-
-/// Get an emoji icon for a module based on its name.
-fn module_icon(name: &str) -> &'static str {
-    let lower = name.to_lowercase();
-    if lower.contains("xcode") {
-        "\u{1f528}" // 🔨
-    } else if lower.contains("npm") || lower.contains("yarn") || lower.contains("pnpm") {
-        "\u{1f4e6}" // 📦
-    } else if lower.contains("homebrew") || lower.contains("brew") {
-        "\u{1f37a}" // 🍺
-    } else if lower.contains("docker") {
-        "\u{1f433}" // 🐳
-    } else if lower.contains("cache") {
-        "\u{1f5c2}" // 🗂
-    } else {
-        "\u{1f4c1}" // 📁
-    }
 }

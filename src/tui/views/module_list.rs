@@ -5,41 +5,36 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{App, ModuleStatus, ScanStatus};
-use crate::tui::widgets::{format_size, format_size_or_placeholder};
+use crate::app::{App, ModuleStatus, ScanStatus, SortMode};
+use crate::tui::widgets::{checkbox_str, format_size, format_size_or_placeholder, module_icon, CheckState};
 
-/// Get an emoji icon for a module based on its name.
-fn module_icon(name: &str) -> &'static str {
-    let lower = name.to_lowercase();
-    if lower.contains("xcode") {
-        "\u{1f528}" // 🔨
-    } else if lower.contains("npm") || lower.contains("yarn") || lower.contains("pnpm") {
-        "\u{1f4e6}" // 📦
-    } else if lower.contains("homebrew") || lower.contains("brew") {
-        "\u{1f37a}" // 🍺
-    } else if lower.contains("docker") {
-        "\u{1f433}" // 🐳
-    } else if lower.contains("cache") {
-        "\u{1f5c2}" // 🗂
-    } else {
-        "\u{1f4c1}" // 📁
-    }
-}
-
-/// Compute module indices sorted by total_size descending.
-/// Modules with known sizes sort before those still calculating (None).
+/// Compute module indices sorted according to the current sort mode.
 pub fn sorted_module_indices(app: &App) -> Vec<usize> {
     let mut indices: Vec<usize> = (0..app.modules.len()).collect();
-    indices.sort_by(|&a, &b| {
-        let size_a = app.modules[a].total_size;
-        let size_b = app.modules[b].total_size;
-        match (size_b, size_a) {
-            (Some(sb), Some(sa)) => sb.cmp(&sa),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.cmp(&b),
+    match app.sort_mode {
+        SortMode::Default => {
+            // Insertion order — no sorting needed
         }
-    });
+        SortMode::Alphabetical => {
+            indices.sort_by(|&a, &b| {
+                let name_a = app.modules[a].module.name.to_lowercase();
+                let name_b = app.modules[b].module.name.to_lowercase();
+                name_a.cmp(&name_b)
+            });
+        }
+        SortMode::SizeDesc => {
+            indices.sort_by(|&a, &b| {
+                let size_a = app.modules[a].total_size;
+                let size_b = app.modules[b].total_size;
+                match (size_b, size_a) {
+                    (Some(sb), Some(sa)) => sb.cmp(&sa),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => a.cmp(&b),
+                }
+            });
+        }
+    }
     indices
 }
 
@@ -146,20 +141,30 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
             let ms = &app.modules[module_idx];
             let icon = module_icon(&ms.module.name);
 
-            // Name cell with icon and status indicator
-            let (status_char, status_style) = match &ms.status {
-                ModuleStatus::Loading | ModuleStatus::Discovering => {
-                    ("\u{27f3} ", app.theme.style_status_loading())
+            // Checkbox: compute selection state for this module
+            let check_state = if ms.items.is_empty() {
+                CheckState::None
+            } else {
+                let selected_count = ms
+                    .items
+                    .iter()
+                    .filter(|item| app.selected_items.contains(&item.path))
+                    .count();
+                if selected_count == 0 {
+                    CheckState::None
+                } else if selected_count == ms.items.len() {
+                    CheckState::All
+                } else {
+                    CheckState::Partial
                 }
-                ModuleStatus::Error(_) => ("\u{26a0} ", app.theme.style_status_error()),
-                ModuleStatus::Ready => ("\u{25cf} ", app.theme.style_status_ready()),
             };
+            let checkbox_cell =
+                Cell::from(Span::styled(checkbox_str(&check_state), app.theme.style_normal()));
 
+            // Name cell with icon (no status emoji)
             let name_cell = Cell::from(Line::from(vec![
                 Span::raw(format!("{} ", icon)),
                 Span::styled(&ms.module.name, app.theme.style_normal()),
-                Span::raw(" "),
-                Span::styled(status_char, status_style),
             ]));
 
             // Items count
@@ -181,14 +186,15 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
                 }
             };
 
-            Row::new(vec![name_cell, items_cell, size_cell])
+            Row::new(vec![checkbox_cell, name_cell, items_cell, size_cell])
         })
         .collect();
 
     let widths = [
-        Constraint::Min(30),
-        Constraint::Length(12),
-        Constraint::Length(16),
+        Constraint::Length(5),  // Checkbox
+        Constraint::Min(30),   // Name
+        Constraint::Length(12), // Items
+        Constraint::Length(16), // Size
     ];
 
     let table = Table::new(rows, widths)
@@ -207,8 +213,12 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
+    let sort_label = app.sort_mode.label();
     let status = Paragraph::new(Line::from(vec![Span::styled(
-        " \u{2191}/\u{2193} navigate  Enter details  c clean  d dry-run  ? help  q quit ",
+        format!(
+            " \u{2191}/\u{2193} navigate  Space select  Enter details  s sort ({})  c clean  ? help  q quit ",
+            sort_label
+        ),
         app.theme.style_normal(),
     )]));
     frame.render_widget(status, area);

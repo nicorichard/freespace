@@ -32,6 +32,8 @@ pub struct App {
     pub previous_view: View,
     /// Whether the application should exit.
     pub should_quit: bool,
+    /// Sort mode for the module list.
+    pub sort_mode: SortMode,
     /// Receiver for scan messages from the background scanner.
     scan_rx: mpsc::UnboundedReceiver<ScanMessage>,
     /// Counter incremented each event loop tick, used for spinner animation.
@@ -67,6 +69,7 @@ impl App {
             theme: Theme::default(),
             previous_view: View::ModuleList,
             should_quit: false,
+            sort_mode: SortMode::Default,
             scan_rx: rx,
             tick_count: 0,
         }
@@ -208,6 +211,31 @@ impl App {
                     self.current_view = View::ModuleDetail(module_idx);
                     self.selected_index = 0;
                 }
+            }
+            // Toggle selection for all items in the focused module
+            KeyCode::Char(' ') => {
+                let sorted = views::module_list::sorted_module_indices(self);
+                if let Some(&module_idx) = sorted.get(self.selected_index) {
+                    let items = &self.modules[module_idx].items;
+                    let all_selected = !items.is_empty()
+                        && items.iter().all(|item| self.selected_items.contains(&item.path));
+                    if all_selected {
+                        // Deselect all
+                        for item in &self.modules[module_idx].items {
+                            self.selected_items.remove(&item.path);
+                        }
+                    } else {
+                        // Select all
+                        for item in &self.modules[module_idx].items {
+                            self.selected_items.insert(item.path.clone());
+                        }
+                    }
+                }
+            }
+            // Cycle sort mode
+            KeyCode::Char('s') => {
+                self.sort_mode = self.sort_mode.next();
+                self.selected_index = 0;
             }
             // Open help overlay
             KeyCode::Char('?') => {
@@ -454,4 +482,36 @@ pub struct Item {
 pub enum ItemType {
     File,
     Directory,
+}
+
+/// Sort mode for the module list.
+#[derive(Clone, Copy, Default)]
+pub enum SortMode {
+    /// Insertion order (no sorting).
+    #[default]
+    Default,
+    /// Alphabetical by module name (case-insensitive).
+    Alphabetical,
+    /// Size descending (largest first).
+    SizeDesc,
+}
+
+impl SortMode {
+    /// Cycle to the next sort mode.
+    pub fn next(self) -> Self {
+        match self {
+            SortMode::Default => SortMode::Alphabetical,
+            SortMode::Alphabetical => SortMode::SizeDesc,
+            SortMode::SizeDesc => SortMode::Default,
+        }
+    }
+
+    /// Human-readable label for the status bar.
+    pub fn label(self) -> &'static str {
+        match self {
+            SortMode::Default => "default",
+            SortMode::Alphabetical => "a-z",
+            SortMode::SizeDesc => "size",
+        }
+    }
 }

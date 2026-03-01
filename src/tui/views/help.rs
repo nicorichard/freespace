@@ -84,6 +84,8 @@ fn render_keybindings(app: &App, frame: &mut Frame, area: Rect) {
         keybinding_row("j / \u{2193}", "Move down", key_style, desc_style),
         keybinding_row("k / \u{2191}", "Move up", key_style, desc_style),
         keybinding_row("Enter", "Open module details", key_style, desc_style),
+        keybinding_row("Space", "Toggle module selection", key_style, desc_style),
+        keybinding_row("s", "Cycle sort mode", key_style, desc_style),
         keybinding_row("c", "Clean selected items", key_style, desc_style),
         Row::new(vec![Span::raw(""), Span::raw("")]),
         // Module Detail section
