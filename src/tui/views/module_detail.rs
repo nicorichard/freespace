@@ -5,13 +5,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{matches_filter, App, ModuleStatus};
+use crate::app::{matches_filter, App, ItemType, ModuleStatus};
 use crate::tui::widgets::{checkbox_str, format_size, format_size_or_placeholder, module_icon, CheckState};
 
 /// Compute item indices sorted by size descending.
 /// Items with known sizes sort before those still calculating (None).
 pub fn sorted_item_indices(app: &App, module_idx: usize) -> Vec<usize> {
-    let items = &app.modules[module_idx].items;
+    let items = app.current_detail_items(module_idx);
     let mut indices: Vec<usize> = (0..items.len())
         .filter(|&i| matches_filter(&items[i].name, &app.filter_query))
         .collect();
@@ -58,13 +58,26 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize)
     let ms = &app.modules[module_idx];
     let icon = module_icon(&ms.module.name);
 
-    let size_text = match &ms.status {
-        ModuleStatus::Loading | ModuleStatus::Discovering => "calculating...".to_string(),
-        ModuleStatus::Error(e) => format!("Error: {}", e),
-        ModuleStatus::Ready => format_size_or_placeholder(ms.total_size),
+    let title_text = if app.drill_stack.is_empty() {
+        let size_text = match &ms.status {
+            ModuleStatus::Loading | ModuleStatus::Discovering => "calculating...".to_string(),
+            ModuleStatus::Error(e) => format!("Error: {}", e),
+            ModuleStatus::Ready => format_size_or_placeholder(ms.total_size),
+        };
+        format!(" {} {} \u{2014} {} ", icon, ms.module.name, size_text)
+    } else {
+        // Breadcrumb: module > dir1 > dir2
+        let mut parts = vec![ms.module.name.clone()];
+        for level in &app.drill_stack {
+            let dir_name = level
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| level.path.display().to_string());
+            parts.push(dir_name);
+        }
+        format!(" {} {} ", icon, parts.join(" > "))
     };
-
-    let title_text = format!(" {} {} \u{2014} {} ", icon, ms.module.name, size_text);
 
     let title = Paragraph::new(Line::from(vec![Span::styled(
         title_text,
@@ -79,13 +92,19 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize)
 }
 
 fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
+    let items = app.current_detail_items(module_idx);
+    let drilled = !app.drill_stack.is_empty();
     let ms = &app.modules[module_idx];
 
-    if ms.items.is_empty() {
-        let msg = match &ms.status {
-            ModuleStatus::Loading | ModuleStatus::Discovering => "Scanning for items...",
-            ModuleStatus::Error(_) => "Could not scan this module.",
-            ModuleStatus::Ready => "No items found.",
+    if items.is_empty() {
+        let msg = if drilled {
+            "Empty directory."
+        } else {
+            match &ms.status {
+                ModuleStatus::Loading | ModuleStatus::Discovering => "Scanning for items...",
+                ModuleStatus::Error(_) => "Could not scan this module.",
+                ModuleStatus::Ready => "No items found.",
+            }
         };
         let content = Paragraph::new(msg)
             .style(app.theme.style_normal())
@@ -103,7 +122,7 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
     let rows: Vec<Row> = sorted
         .iter()
         .map(|&item_idx| {
-            let item = &ms.items[item_idx];
+            let item = &items[item_idx];
 
             // Selection checkbox
             let check_state = if app.selected_items.contains(&item.path) {
@@ -114,22 +133,32 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
             let checkbox_cell =
                 Cell::from(Span::styled(checkbox_str(&check_state), app.theme.style_normal()));
 
-            // Item name
-            let name_cell = Cell::from(Span::styled(&*item.name, app.theme.style_normal()));
+            // Item name with folder icon for directories
+            let display_name = match item.item_type {
+                ItemType::Directory => format!("\u{1f4c1} {}", item.name),
+                ItemType::File => item.name.clone(),
+            };
+            let name_cell = Cell::from(Span::styled(display_name, app.theme.style_normal()));
 
             // Size cell
             let size_cell = match item.size {
                 Some(size) => {
                     Cell::from(Span::styled(format_size(size), app.theme.style_size()))
                 }
-                None => match &ms.status {
-                    ModuleStatus::Loading | ModuleStatus::Discovering => {
+                None => {
+                    if drilled {
                         Cell::from(Span::styled("calculating...", app.theme.style_status_loading()))
+                    } else {
+                        match &ms.status {
+                            ModuleStatus::Loading | ModuleStatus::Discovering => {
+                                Cell::from(Span::styled("calculating...", app.theme.style_status_loading()))
+                            }
+                            _ => {
+                                Cell::from(Span::styled("N/A \u{26a0}", app.theme.style_warning()))
+                            }
+                        }
                     }
-                    _ => {
-                        Cell::from(Span::styled("N/A \u{26a0}", app.theme.style_warning()))
-                    }
-                },
+                }
             };
 
             Row::new(vec![checkbox_cell, name_cell, size_cell])
@@ -158,6 +187,8 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
 }
 
 fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
+    let drilled = !app.drill_stack.is_empty();
+
     let line = if app.filter_active {
         // Active filter input mode
         Line::from(vec![
@@ -168,7 +199,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize
     } else if !app.filter_query.is_empty() {
         // Filter is set but not being edited
         let sorted = sorted_item_indices(app, module_idx);
-        let total = app.modules[module_idx].items.len();
+        let total = app.current_detail_items(module_idx).len();
         let shown = sorted.len();
         Line::from(vec![
             Span::styled(
@@ -180,10 +211,16 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize
                 app.theme.style_normal(),
             ),
         ])
+    } else if drilled {
+        // Drilled-in status bar
+        Line::from(vec![Span::styled(
+            " \u{2191}/\u{2193} navigate  Space select  a all  n none  o open  / filter  Enter drill  c clean  Backspace/Esc back  ? help  q quit ",
+            app.theme.style_normal(),
+        )])
     } else {
         // Default status bar
         Line::from(vec![Span::styled(
-            " \u{2191}/\u{2193} navigate  Space select  a all  n none  / filter  Enter/c clean  Esc back  ? help  q quit ",
+            " \u{2191}/\u{2193} navigate  Space select  a all  n none  o open  / filter  Enter drill  c clean  Esc back  ? help  q quit ",
             app.theme.style_normal(),
         )])
     };

@@ -6,22 +6,36 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{matches_filter, App};
 use crate::tui::widgets::{format_size, format_size_or_placeholder};
 
 /// Collect selected items across all modules into a flat list of (name, path_display, size).
-fn collect_selected_items(app: &App) -> Vec<(String, String, Option<u64>)> {
+/// Also includes items selected during drill-in that aren't direct module items.
+pub fn collect_selected_items(app: &App) -> Vec<(String, String, Option<u64>)> {
     let mut items: Vec<(String, String, Option<u64>)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
 
     for ms in &app.modules {
         for item in &ms.items {
             if app.selected_items.contains(&item.path) {
+                seen.insert(item.path.clone());
                 items.push((
                     item.name.clone(),
                     item.path.display().to_string(),
                     item.size,
                 ));
             }
+        }
+    }
+
+    // Include drill-in selections not found in module items
+    for path in &app.selected_items {
+        if !seen.contains(path) {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.display().to_string());
+            items.push((name, path.display().to_string(), None));
         }
     }
 
@@ -36,6 +50,16 @@ fn collect_selected_items(app: &App) -> Vec<(String, String, Option<u64>)> {
     });
 
     items
+}
+
+/// Return the number of confirm-list items visible after filtering.
+pub fn filtered_confirm_item_count(app: &App) -> usize {
+    let items = collect_selected_items(app);
+    if app.filter_query.is_empty() {
+        items.len()
+    } else {
+        items.iter().filter(|(name, _, _)| matches_filter(name, &app.filter_query)).count()
+    }
 }
 
 /// Compute a centered rectangle that is at most `max_percent` of the terminal area,
@@ -62,10 +86,20 @@ pub fn render(app: &App, frame: &mut Frame) {
     // Clear the area behind the dialog
     frame.render_widget(Clear, dialog_area);
 
-    let items = collect_selected_items(app);
-    let item_count = items.len();
-    let total_size: u64 = items.iter().filter_map(|i| i.2).sum();
-    let known_count = items.iter().filter(|i| i.2.is_some()).count();
+    let all_items = collect_selected_items(app);
+    let item_count = all_items.len();
+    let total_size: u64 = all_items.iter().filter_map(|i| i.2).sum();
+    let known_count = all_items.iter().filter(|i| i.2.is_some()).count();
+
+    // Apply filter for display, but keep unfiltered totals for summary
+    let filtered_items: Vec<_> = if app.filter_query.is_empty() {
+        all_items
+    } else {
+        all_items
+            .into_iter()
+            .filter(|(name, _, _)| matches_filter(name, &app.filter_query))
+            .collect()
+    };
 
     // Layout inside the dialog: header, items list, summary, action bar
     let inner_chunks = Layout::default()
@@ -79,9 +113,9 @@ pub fn render(app: &App, frame: &mut Frame) {
         .split(dialog_area);
 
     render_header(app, frame, inner_chunks[0]);
-    render_items_list(app, frame, inner_chunks[1], &items);
+    render_items_list(app, frame, inner_chunks[1], &filtered_items);
     render_summary(app, frame, inner_chunks[2], item_count, total_size, known_count);
-    render_action_bar(app, frame, inner_chunks[3]);
+    render_action_bar(app, frame, inner_chunks[3], filtered_items.len(), item_count);
 }
 
 fn render_header(app: &App, frame: &mut Frame, area: Rect) {
@@ -200,10 +234,33 @@ fn render_summary(
     frame.render_widget(summary, area);
 }
 
-fn render_action_bar(app: &App, frame: &mut Frame, area: Rect) {
-    let action = Paragraph::new(Line::from(vec![Span::styled(
-        " t trash  d delete  n/Esc cancel  q quit ",
-        app.theme.style_normal(),
-    )]));
+fn render_action_bar(app: &App, frame: &mut Frame, area: Rect, shown: usize, total: usize) {
+    let line = if app.filter_active {
+        // Active filter input mode
+        Line::from(vec![
+            Span::styled(" / ", app.theme.style_size()),
+            Span::styled(&app.filter_query, app.theme.style_normal()),
+            Span::styled("\u{2588}", app.theme.style_size()),
+        ])
+    } else if !app.filter_query.is_empty() {
+        // Filter is set but not being edited
+        Line::from(vec![
+            Span::styled(
+                format!(" filter: \"{}\" ({}/{})  ", app.filter_query, shown, total),
+                app.theme.style_size(),
+            ),
+            Span::styled(
+                "/ filter  Esc clear",
+                app.theme.style_normal(),
+            ),
+        ])
+    } else {
+        // Default action bar
+        Line::from(vec![Span::styled(
+            " t trash  d delete  n/Esc cancel  \u{2191}/\u{2193} scroll  / filter  q quit ",
+            app.theme.style_normal(),
+        )])
+    };
+    let action = Paragraph::new(line);
     frame.render_widget(action, area);
 }
