@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{App, ModuleStatus};
+use crate::app::{App, ModuleStatus, ScanStatus};
 use crate::tui::widgets::{format_size, format_size_or_placeholder};
 
 /// Get an emoji icon for a module based on its name.
@@ -69,25 +69,67 @@ pub fn render(app: &App, frame: &mut Frame) {
     render_status_bar(app, frame, chunks[2]);
 }
 
+/// Spinner characters that cycle during scanning.
+const SPINNER_CHARS: &[char] = &['\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}', '\u{2827}', '\u{2807}', '\u{280f}'];
+
 fn render_title_bar(app: &App, frame: &mut Frame, area: Rect) {
     let total: u64 = app.modules.iter().filter_map(|m| m.total_size).sum();
-    let any_known = app.modules.iter().any(|m| m.total_size.is_some());
 
-    let title_text = if any_known {
-        format!(" Freespace \u{2014} {} total ", format_size(total))
-    } else {
-        " Freespace ".to_string()
+    let title_spans = match &app.scan_status {
+        ScanStatus::Scanning => {
+            let total_modules = app.modules.len();
+            let completed_modules = app.modules.iter().filter(|m| {
+                matches!(m.status, ModuleStatus::Ready | ModuleStatus::Error(_))
+            }).count();
+
+            let spinner = SPINNER_CHARS[app.tick_count % SPINNER_CHARS.len()];
+            let progress_text = format!(
+                " {} Scanning... {}/{} modules ",
+                spinner, completed_modules, total_modules
+            );
+
+            let any_known = app.modules.iter().any(|m| m.total_size.is_some());
+            if any_known {
+                vec![
+                    Span::styled(" Freespace ", app.theme.style_header()),
+                    Span::styled(
+                        progress_text,
+                        app.theme.style_status_loading(),
+                    ),
+                    Span::styled(
+                        format!(" {} ", format_size(total)),
+                        app.theme.style_size(),
+                    ),
+                ]
+            } else {
+                vec![
+                    Span::styled(" Freespace ", app.theme.style_header()),
+                    Span::styled(
+                        progress_text,
+                        app.theme.style_status_loading(),
+                    ),
+                ]
+            }
+        }
+        _ => {
+            let any_known = app.modules.iter().any(|m| m.total_size.is_some());
+            if any_known {
+                vec![Span::styled(
+                    format!(" Freespace \u{2014} {} total ", format_size(total)),
+                    app.theme.style_header(),
+                )]
+            } else {
+                vec![Span::styled(" Freespace ", app.theme.style_header())]
+            }
+        }
     };
 
-    let title = Paragraph::new(Line::from(vec![Span::styled(
-        title_text,
-        app.theme.style_header(),
-    )]))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(app.theme.style_border()),
-    );
+    let title = Paragraph::new(Line::from(title_spans))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(app.theme.style_border()),
+        );
     frame.render_widget(title, area);
 }
 

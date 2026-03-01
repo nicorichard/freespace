@@ -34,6 +34,8 @@ pub struct App {
     pub should_quit: bool,
     /// Receiver for scan messages from the background scanner.
     scan_rx: mpsc::UnboundedReceiver<ScanMessage>,
+    /// Counter incremented each event loop tick, used for spinner animation.
+    pub tick_count: usize,
 }
 
 impl App {
@@ -66,6 +68,7 @@ impl App {
             previous_view: View::ModuleList,
             should_quit: false,
             scan_rx: rx,
+            tick_count: 0,
         }
     }
 
@@ -118,6 +121,9 @@ impl App {
 
             // Process any pending scan messages (non-blocking)
             self.process_scan_messages();
+
+            // Increment tick counter for spinner animation
+            self.tick_count = self.tick_count.wrapping_add(1);
         }
 
         Ok(())
