@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use tokio::sync::mpsc;
 
 use crate::config::AppConfig;
@@ -109,7 +109,7 @@ impl App {
                 match event::read()? {
                     Event::Key(key) => {
                         if key.kind == KeyEventKind::Press {
-                            self.handle_key(key.code);
+                            self.handle_key(key.code, key.modifiers);
                         }
                     }
                     Event::Resize(_, _) => {
@@ -163,9 +163,11 @@ impl App {
     }
 
     /// Dispatch key events based on the current view.
-    fn handle_key(&mut self, key: KeyCode) {
-        // Global: q quits from any view
-        if key == KeyCode::Char('q') {
+    fn handle_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        // Global: q or Ctrl+C quits from any view
+        if key == KeyCode::Char('q')
+            || (key == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL))
+        {
             self.should_quit = true;
             return;
         }
@@ -219,6 +221,10 @@ impl App {
                     self.current_view = View::CleanupConfirm;
                     self.selected_index = 0;
                 }
+            }
+            // Esc quits from the base screen
+            KeyCode::Esc => {
+                self.should_quit = true;
             }
             _ => {}
         }
