@@ -483,13 +483,11 @@ impl App {
                 self.filter_cursor = 0;
                 self.selected_index = 0;
             }
-            // Esc: clear filter first, then quit
+            // Esc: clear filter
             KeyCode::Esc => {
                 if !self.filter_query.is_empty() {
                     self.clear_filter();
                     self.selected_index = 0;
-                } else {
-                    self.should_quit = true;
                 }
             }
             _ => {}
