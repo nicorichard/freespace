@@ -10,6 +10,10 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "freespace", version, about)]
 struct Cli {
+    /// Additional module directory to scan (can be repeated)
+    #[arg(long = "module-dir", global = true)]
+    module_dirs: Vec<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -50,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
             let mut terminal = tui::init()?;
 
             // Create app and run the main event loop
-            let mut app = app::App::new();
+            let mut app = app::App::new(cli.module_dirs);
             app.run(&mut terminal)?;
 
             // Restore terminal on normal exit

@@ -47,9 +47,9 @@ pub struct App {
 }
 
 impl App {
-    /// Create a new App with default state, load built-in modules, and start scanning.
-    pub fn new() -> Self {
-        let modules = Self::load_modules();
+    /// Create a new App with default state, load modules, and start scanning.
+    pub fn new(cli_module_dirs: Vec<String>) -> Self {
+        let modules = Self::load_modules(cli_module_dirs);
 
         // Create channel for scan messages
         let (tx, rx) = mpsc::unbounded_channel();
@@ -84,14 +84,24 @@ impl App {
         }
     }
 
-    /// Discover and load built-in modules from the modules/ directory.
-    fn load_modules() -> Vec<ModuleState> {
-        let modules_dir = match manager::find_modules_dir() {
-            Some(dir) => dir,
-            None => return Vec::new(),
+    /// Discover and load modules from all configured directories.
+    fn load_modules(cli_module_dirs: Vec<String>) -> Vec<ModuleState> {
+        // Load config file (warnings on failure, use defaults)
+        let config = match AppConfig::load() {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("warning: {}", e);
+                AppConfig::default()
+            }
         };
 
-        let (modules, warnings) = manager::load_builtin_modules(&modules_dir);
+        // Merge extra dirs: config dirs first, then CLI dirs
+        let mut extra_dirs = config.module_dirs.clone();
+        extra_dirs.extend(cli_module_dirs);
+
+        let default_dir = crate::config::default_modules_dir();
+
+        let (modules, warnings) = manager::load_all_modules(default_dir, &extra_dirs);
 
         // Log warnings to stderr (they won't be visible in the TUI but are
         // available if the user redirects stderr)
@@ -420,9 +430,15 @@ impl App {
 
     fn handle_key_cleanup_confirm(&mut self, key: KeyCode) {
         match key {
-            // Confirm cleanup
-            KeyCode::Char('y') => {
-                self.perform_cleanup();
+            // Move to trash (reversible)
+            KeyCode::Char('t') => {
+                self.perform_cleanup(false);
+                self.current_view = self.previous_view;
+                self.selected_index = 0;
+            }
+            // Permanently delete
+            KeyCode::Char('d') => {
+                self.perform_cleanup(true);
                 self.current_view = self.previous_view;
                 self.selected_index = 0;
             }
@@ -436,11 +452,16 @@ impl App {
     }
 
     /// Perform live cleanup: delete selected items and update module state.
-    fn perform_cleanup(&mut self) {
+    /// When `permanent` is true, items are permanently deleted; otherwise they are moved to trash.
+    fn perform_cleanup(&mut self, permanent: bool) {
         let paths: Vec<std::path::PathBuf> =
             self.selected_items.iter().cloned().collect();
 
-        let result = cleaner::delete_items(&paths);
+        let result = if permanent {
+            cleaner::delete_items(&paths)
+        } else {
+            cleaner::trash_items(&paths)
+        };
 
         // Remove successfully deleted items from module state
         let succeeded: HashSet<PathBuf> =

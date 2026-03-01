@@ -202,7 +202,7 @@ fn render_summary(
 
 fn render_action_bar(app: &App, frame: &mut Frame, area: Rect) {
     let action = Paragraph::new(Line::from(vec![Span::styled(
-        " y confirm  n/Esc cancel  q quit ",
+        " t trash  d delete  n/Esc cancel  q quit ",
         app.theme.style_normal(),
     )]));
     frame.render_widget(action, area);
