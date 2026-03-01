@@ -116,8 +116,45 @@ impl App {
 
     // Stub key handlers for each view — will be implemented in later stories.
 
-    fn handle_key_module_list(&mut self, _key: KeyCode) {
-        // Will be implemented in US-012
+    fn handle_key_module_list(&mut self, key: KeyCode) {
+        let count = self.modules.len();
+        if count == 0 {
+            return;
+        }
+
+        match key {
+            // Navigate down
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.selected_index = (self.selected_index + 1) % count;
+            }
+            // Navigate up
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.selected_index = if self.selected_index == 0 {
+                    count - 1
+                } else {
+                    self.selected_index - 1
+                };
+            }
+            // Enter detail view for selected module
+            KeyCode::Enter => {
+                let sorted = views::module_list::sorted_module_indices(self);
+                if let Some(&module_idx) = sorted.get(self.selected_index) {
+                    self.current_view = View::ModuleDetail(module_idx);
+                    self.selected_index = 0;
+                }
+            }
+            // Open help overlay
+            KeyCode::Char('?') => {
+                self.current_view = View::Help;
+            }
+            // Transition to cleanup confirmation if items are selected
+            KeyCode::Char('c') => {
+                if !self.selected_items.is_empty() {
+                    self.current_view = View::CleanupConfirm;
+                }
+            }
+            _ => {}
+        }
     }
 
     fn handle_key_module_detail(&mut self, _key: KeyCode) {
