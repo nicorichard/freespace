@@ -157,8 +157,74 @@ impl App {
         }
     }
 
-    fn handle_key_module_detail(&mut self, _key: KeyCode) {
-        // Will be implemented in US-014
+    fn handle_key_module_detail(&mut self, key: KeyCode) {
+        let module_idx = match &self.current_view {
+            View::ModuleDetail(idx) => *idx,
+            _ => return,
+        };
+
+        if module_idx >= self.modules.len() {
+            return;
+        }
+
+        let sorted = views::module_detail::sorted_item_indices(self, module_idx);
+        let count = sorted.len();
+
+        match key {
+            // Navigate down
+            KeyCode::Char('j') | KeyCode::Down => {
+                if count > 0 {
+                    self.selected_index = (self.selected_index + 1) % count;
+                }
+            }
+            // Navigate up
+            KeyCode::Char('k') | KeyCode::Up => {
+                if count > 0 {
+                    self.selected_index = if self.selected_index == 0 {
+                        count - 1
+                    } else {
+                        self.selected_index - 1
+                    };
+                }
+            }
+            // Toggle selection on highlighted item
+            KeyCode::Char(' ') => {
+                if let Some(&item_idx) = sorted.get(self.selected_index) {
+                    let path = self.modules[module_idx].items[item_idx].path.clone();
+                    if !self.selected_items.remove(&path) {
+                        self.selected_items.insert(path);
+                    }
+                }
+            }
+            // Select all items in current module
+            KeyCode::Char('a') => {
+                for item in &self.modules[module_idx].items {
+                    self.selected_items.insert(item.path.clone());
+                }
+            }
+            // Deselect all items in current module
+            KeyCode::Char('n') => {
+                for item in &self.modules[module_idx].items {
+                    self.selected_items.remove(&item.path);
+                }
+            }
+            // Transition to cleanup confirmation (if items selected)
+            KeyCode::Enter | KeyCode::Char('c') => {
+                if !self.selected_items.is_empty() {
+                    self.current_view = View::CleanupConfirm;
+                }
+            }
+            // Return to module list view
+            KeyCode::Backspace | KeyCode::Esc => {
+                self.current_view = View::ModuleList;
+                self.selected_index = 0;
+            }
+            // Open help overlay
+            KeyCode::Char('?') => {
+                self.current_view = View::Help;
+            }
+            _ => {}
+        }
     }
 
     fn handle_key_cleanup_confirm(&mut self, _key: KeyCode) {
