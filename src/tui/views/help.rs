@@ -35,7 +35,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Header
-            Constraint::Min(3),   // Keybindings content
+            Constraint::Min(3),    // Keybindings content
             Constraint::Length(1), // Footer
         ])
         .split(dialog_area);
@@ -69,10 +69,7 @@ fn render_keybindings(app: &App, frame: &mut Frame, area: Rect) {
 
     let rows: Vec<Row> = vec![
         // Global section
-        Row::new(vec![
-            Span::styled("Global", section_style),
-            Span::raw(""),
-        ]),
+        Row::new(vec![Span::styled("Global", section_style), Span::raw("")]),
         keybinding_row("q", "Quit application", key_style, desc_style),
         keybinding_row("?", "Toggle help overlay", key_style, desc_style),
         Row::new(vec![Span::raw(""), Span::raw("")]),
@@ -104,7 +101,12 @@ fn render_keybindings(app: &App, frame: &mut Frame, area: Rect) {
         keybinding_row("o", "Open in file manager", key_style, desc_style),
         keybinding_row("/", "Filter list", key_style, desc_style),
         keybinding_row("c", "Clean selected items", key_style, desc_style),
-        keybinding_row("Backspace / Esc", "Back (up one level / module list)", key_style, desc_style),
+        keybinding_row(
+            "Backspace / Esc",
+            "Back (up one level / module list)",
+            key_style,
+            desc_style,
+        ),
         Row::new(vec![Span::raw(""), Span::raw("")]),
         // Cleanup section
         Row::new(vec![
@@ -117,7 +119,7 @@ fn render_keybindings(app: &App, frame: &mut Frame, area: Rect) {
 
     let widths = [
         Constraint::Length(20), // Key column
-        Constraint::Min(20),   // Description column
+        Constraint::Min(20),    // Description column
     ];
 
     let table = Table::new(rows, widths)

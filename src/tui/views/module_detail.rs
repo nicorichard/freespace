@@ -6,10 +6,15 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
 use crate::app::{matches_filter, App, ItemType, ModuleStatus};
-use crate::tui::widgets::{checkbox_str, format_size, format_size_or_placeholder, module_icon, CheckState};
+use crate::tui::widgets::{
+    checkbox_str, format_size, format_size_or_placeholder, module_icon, CheckState,
+};
 
 /// Spinner characters that cycle during loading.
-const SPINNER_CHARS: &[char] = &['\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}', '\u{2827}', '\u{2807}', '\u{280f}'];
+const SPINNER_CHARS: &[char] = &[
+    '\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}', '\u{2827}',
+    '\u{2807}', '\u{280f}',
+];
 
 /// Compute item indices sorted by size descending.
 /// Items with known sizes sort before those still calculating (None).
@@ -37,8 +42,7 @@ pub fn render(app: &App, frame: &mut Frame, module_idx: usize) {
 
     // Bounds check
     if module_idx >= app.modules.len() {
-        let msg = Paragraph::new("Module not found.")
-            .style(app.theme.style_error());
+        let msg = Paragraph::new("Module not found.").style(app.theme.style_error());
         frame.render_widget(msg, area);
         return;
     }
@@ -47,7 +51,7 @@ pub fn render(app: &App, frame: &mut Frame, module_idx: usize) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Title bar
-            Constraint::Min(1),   // Content
+            Constraint::Min(1),    // Content
             Constraint::Length(1), // Path bar
             Constraint::Length(1), // Status bar
         ])
@@ -111,13 +115,11 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
                 ModuleStatus::Ready => "No items found.",
             }
         };
-        let content = Paragraph::new(msg)
-            .style(app.theme.style_normal())
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(app.theme.style_border()),
-            );
+        let content = Paragraph::new(msg).style(app.theme.style_normal()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(app.theme.style_border()),
+        );
         frame.render_widget(content, area);
         return;
     }
@@ -127,10 +129,7 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
         let sized = items.iter().filter(|i| i.size.is_some()).count();
         let total = items.len();
         let spinner = SPINNER_CHARS[app.tick_count % SPINNER_CHARS.len()];
-        let loading_text = format!(
-            "{} Calculating sizes... {}/{}",
-            spinner, sized, total
-        );
+        let loading_text = format!("{} Calculating sizes... {}/{}", spinner, sized, total);
         let content = Paragraph::new(loading_text)
             .style(app.theme.style_status_loading())
             .alignment(ratatui::layout::Alignment::Center)
@@ -156,8 +155,10 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
             } else {
                 CheckState::None
             };
-            let checkbox_cell =
-                Cell::from(Span::styled(checkbox_str(&check_state), app.theme.style_normal()));
+            let checkbox_cell = Cell::from(Span::styled(
+                checkbox_str(&check_state),
+                app.theme.style_normal(),
+            ));
 
             // Item name with folder icon for directories
             let display_name = match item.item_type {
@@ -168,17 +169,18 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
 
             // Size cell
             let size_cell = match item.size {
-                Some(size) => {
-                    Cell::from(Span::styled(format_size(size), app.theme.style_size()))
-                }
+                Some(size) => Cell::from(Span::styled(format_size(size), app.theme.style_size())),
                 None => {
                     if drilled {
-                        Cell::from(Span::styled("calculating...", app.theme.style_status_loading()))
+                        Cell::from(Span::styled(
+                            "calculating...",
+                            app.theme.style_status_loading(),
+                        ))
                     } else {
                         match &ms.status {
-                            ModuleStatus::Loading | ModuleStatus::Discovering => {
-                                Cell::from(Span::styled("calculating...", app.theme.style_status_loading()))
-                            }
+                            ModuleStatus::Loading | ModuleStatus::Discovering => Cell::from(
+                                Span::styled("calculating...", app.theme.style_status_loading()),
+                            ),
                             _ => {
                                 Cell::from(Span::styled("N/A \u{26a0}", app.theme.style_warning()))
                             }
@@ -193,7 +195,7 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
 
     let widths = [
         Constraint::Length(5),  // Checkbox
-        Constraint::Min(30),   // Name
+        Constraint::Min(30),    // Name
         Constraint::Length(16), // Size
     ];
 
@@ -246,10 +248,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize
                 format!(" filter: \"{}\" ({}/{})  ", app.filter_query, shown, total),
                 app.theme.style_size(),
             ),
-            Span::styled(
-                "/ filter  Esc clear",
-                app.theme.style_normal(),
-            ),
+            Span::styled("/ filter  Esc clear", app.theme.style_normal()),
         ])
     } else if drilled {
         // Drilled-in status bar
@@ -266,4 +265,99 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize
     };
     let status = Paragraph::new(line);
     frame.render_widget(status, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{Item, ItemType, ModuleState, ModuleStatus};
+    use crate::module::manifest::{Module, Target};
+    use std::path::PathBuf;
+
+    fn make_detail_app() -> App {
+        let module = Module {
+            name: "test-module".to_string(),
+            version: "1.0.0".to_string(),
+            description: "test".to_string(),
+            author: "tester".to_string(),
+            platforms: vec!["macos".to_string()],
+            targets: vec![Target {
+                path: Some("~/test".to_string()),
+                name: None,
+                indicator: None,
+                description: None,
+            }],
+        };
+        let ms = ModuleState {
+            module,
+            items: vec![
+                Item {
+                    name: "large-dir".to_string(),
+                    path: PathBuf::from("/tmp/large-dir"),
+                    size: Some(5_000_000_000),
+                    item_type: ItemType::Directory,
+                },
+                Item {
+                    name: "small-file".to_string(),
+                    path: PathBuf::from("/tmp/small-file"),
+                    size: Some(1_000),
+                    item_type: ItemType::File,
+                },
+            ],
+            total_size: Some(5_000_001_000),
+            status: ModuleStatus::Ready,
+        };
+        let mut app = App::new_for_test(vec![ms]);
+        app.current_view = crate::app::View::ModuleDetail(0);
+        app
+    }
+
+    #[test]
+    fn sorted_items_by_size_descending() {
+        let app = make_detail_app();
+        let sorted = sorted_item_indices(&app, 0);
+        assert_eq!(sorted.len(), 2);
+        assert_eq!(app.modules[0].items[sorted[0]].name, "large-dir");
+        assert_eq!(app.modules[0].items[sorted[1]].name, "small-file");
+    }
+
+    #[test]
+    fn sorted_items_respects_filter() {
+        let mut app = make_detail_app();
+        app.filter_query = "large".to_string();
+        let sorted = sorted_item_indices(&app, 0);
+        assert_eq!(sorted.len(), 1);
+        assert_eq!(app.modules[0].items[sorted[0]].name, "large-dir");
+    }
+
+    #[test]
+    fn render_does_not_panic() {
+        let app = make_detail_app();
+        let backend = ratatui::backend::TestBackend::new(100, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(&app, frame, 0)).unwrap();
+    }
+
+    #[test]
+    fn render_does_not_panic_empty_items() {
+        let module = Module {
+            name: "empty".to_string(),
+            version: "1.0.0".to_string(),
+            description: "test".to_string(),
+            author: "tester".to_string(),
+            platforms: vec!["macos".to_string()],
+            targets: vec![],
+        };
+        let ms = ModuleState {
+            module,
+            items: vec![],
+            total_size: Some(0),
+            status: ModuleStatus::Ready,
+        };
+        let mut app = App::new_for_test(vec![ms]);
+        app.current_view = crate::app::View::ModuleDetail(0);
+        let backend = ratatui::backend::TestBackend::new(100, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(&app, frame, 0)).unwrap();
+    }
 }

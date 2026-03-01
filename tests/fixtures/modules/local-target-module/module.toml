@@ -1,0 +1,10 @@
+name = "local-target-test"
+version = "1.0.0"
+description = "Module with local targets"
+author = "tester"
+platforms = ["macos", "linux"]
+
+[[targets]]
+name = "node_modules"
+indicator = "package.json"
+description = "Node.js dependencies"

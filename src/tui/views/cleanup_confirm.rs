@@ -40,13 +40,11 @@ pub fn collect_selected_items(app: &App) -> Vec<(String, String, Option<u64>)> {
     }
 
     // Sort by size descending (known sizes first)
-    items.sort_by(|a, b| {
-        match (b.2, a.2) {
-            (Some(sb), Some(sa)) => sb.cmp(&sa),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.0.cmp(&b.0),
-        }
+    items.sort_by(|a, b| match (b.2, a.2) {
+        (Some(sb), Some(sa)) => sb.cmp(&sa),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.0.cmp(&b.0),
     });
 
     items
@@ -58,7 +56,10 @@ pub fn filtered_confirm_item_count(app: &App) -> usize {
     if app.filter_query.is_empty() {
         items.len()
     } else {
-        items.iter().filter(|(name, _, _)| matches_filter(name, &app.filter_query)).count()
+        items
+            .iter()
+            .filter(|(name, _, _)| matches_filter(name, &app.filter_query))
+            .count()
     }
 }
 
@@ -106,7 +107,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Header with border
-            Constraint::Min(3),   // Items table (scrollable)
+            Constraint::Min(3),    // Items table (scrollable)
             Constraint::Length(2), // Summary line
             Constraint::Length(1), // Action bar
         ])
@@ -114,8 +115,21 @@ pub fn render(app: &App, frame: &mut Frame) {
 
     render_header(app, frame, inner_chunks[0]);
     render_items_list(app, frame, inner_chunks[1], &filtered_items);
-    render_summary(app, frame, inner_chunks[2], item_count, total_size, known_count);
-    render_action_bar(app, frame, inner_chunks[3], filtered_items.len(), item_count);
+    render_summary(
+        app,
+        frame,
+        inner_chunks[2],
+        item_count,
+        total_size,
+        known_count,
+    );
+    render_action_bar(
+        app,
+        frame,
+        inner_chunks[3],
+        filtered_items.len(),
+        item_count,
+    );
 }
 
 fn render_header(app: &App, frame: &mut Frame, area: Rect) {
@@ -130,7 +144,6 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     );
     frame.render_widget(header, area);
 }
-
 
 fn render_items_list(
     app: &App,
@@ -177,9 +190,9 @@ fn render_items_list(
         .collect();
 
     let widths = [
-        Constraint::Length(20),  // Name
-        Constraint::Min(20),     // Path
-        Constraint::Length(12),  // Size
+        Constraint::Length(20), // Name
+        Constraint::Min(20),    // Path
+        Constraint::Length(12), // Size
     ];
 
     let table = Table::new(rows, widths)
@@ -207,7 +220,10 @@ fn render_summary(
 ) {
     let size_text = format_size(total_size);
     let suffix = if known_count < item_count {
-        format!(" ({} of {} items have known sizes)", known_count, item_count)
+        format!(
+            " ({} of {} items have known sizes)",
+            known_count, item_count
+        )
     } else {
         String::new()
     };
@@ -222,9 +238,7 @@ fn render_summary(
 
     let summary = Paragraph::new(Line::from(vec![Span::styled(
         summary_text,
-        app.theme
-            .style_size()
-            .add_modifier(Modifier::BOLD),
+        app.theme.style_size().add_modifier(Modifier::BOLD),
     )]))
     .block(
         Block::default()
@@ -249,10 +263,7 @@ fn render_action_bar(app: &App, frame: &mut Frame, area: Rect, shown: usize, tot
                 format!(" filter: \"{}\" ({}/{})  ", app.filter_query, shown, total),
                 app.theme.style_size(),
             ),
-            Span::styled(
-                "/ filter  Esc clear",
-                app.theme.style_normal(),
-            ),
+            Span::styled("/ filter  Esc clear", app.theme.style_normal()),
         ])
     } else {
         // Default action bar
@@ -263,4 +274,91 @@ fn render_action_bar(app: &App, frame: &mut Frame, area: Rect, shown: usize, tot
     };
     let action = Paragraph::new(line);
     frame.render_widget(action, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{Item, ItemType, ModuleState, ModuleStatus, View};
+    use crate::module::manifest::{Module, Target};
+    use std::path::PathBuf;
+
+    fn make_confirm_app() -> App {
+        let module = Module {
+            name: "test".to_string(),
+            version: "1.0.0".to_string(),
+            description: "test".to_string(),
+            author: "tester".to_string(),
+            platforms: vec!["macos".to_string()],
+            targets: vec![Target {
+                path: Some("~/test".to_string()),
+                name: None,
+                indicator: None,
+                description: None,
+            }],
+        };
+        let ms = ModuleState {
+            module,
+            items: vec![
+                Item {
+                    name: "big".to_string(),
+                    path: PathBuf::from("/tmp/big"),
+                    size: Some(5_000_000_000),
+                    item_type: ItemType::Directory,
+                },
+                Item {
+                    name: "small".to_string(),
+                    path: PathBuf::from("/tmp/small"),
+                    size: Some(1_000),
+                    item_type: ItemType::File,
+                },
+            ],
+            total_size: Some(5_000_001_000),
+            status: ModuleStatus::Ready,
+        };
+        let mut app = App::new_for_test(vec![ms]);
+        // Select both items
+        app.selected_items.insert(PathBuf::from("/tmp/big"));
+        app.selected_items.insert(PathBuf::from("/tmp/small"));
+        app.current_view = View::CleanupConfirm;
+        app.previous_view = View::ModuleList;
+        app
+    }
+
+    #[test]
+    fn collect_selected_items_returns_all() {
+        let app = make_confirm_app();
+        let items = collect_selected_items(&app);
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn collect_selected_items_sorted_by_size_desc() {
+        let app = make_confirm_app();
+        let items = collect_selected_items(&app);
+        // Largest first
+        assert_eq!(items[0].0, "big");
+        assert_eq!(items[1].0, "small");
+    }
+
+    #[test]
+    fn filtered_confirm_count_all() {
+        let app = make_confirm_app();
+        assert_eq!(filtered_confirm_item_count(&app), 2);
+    }
+
+    #[test]
+    fn filtered_confirm_count_with_filter() {
+        let mut app = make_confirm_app();
+        app.filter_query = "big".to_string();
+        assert_eq!(filtered_confirm_item_count(&app), 1);
+    }
+
+    #[test]
+    fn render_does_not_panic() {
+        let app = make_confirm_app();
+        let backend = ratatui::backend::TestBackend::new(100, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(&app, frame)).unwrap();
+    }
 }

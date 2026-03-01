@@ -21,7 +21,6 @@ freespace
 ### Subcommands
 
 ```sh
-freespace scan          # Run a scan (non-interactive)
 freespace module list   # List installed modules
 freespace module install <path>
 freespace module remove <name>

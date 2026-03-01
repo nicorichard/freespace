@@ -66,3 +66,51 @@ pub fn default_modules_dir() -> Option<PathBuf> {
 pub fn config_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("config.toml"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_values() {
+        let config = AppConfig::default();
+        assert!(config.dry_run);
+        assert!(config.module_dirs.is_empty());
+        assert!(config.search_dirs.is_empty());
+    }
+
+    #[test]
+    fn parse_valid_config() {
+        let toml_str = r#"
+        module_dirs = ["~/extra-modules"]
+        search_dirs = ["~/Projects", "~/Work"]
+        "#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.module_dirs, vec!["~/extra-modules"]);
+        assert_eq!(config.search_dirs, vec!["~/Projects", "~/Work"]);
+    }
+
+    #[test]
+    fn parse_empty_config() {
+        let config: AppConfig = toml::from_str("").unwrap();
+        assert!(config.module_dirs.is_empty());
+        assert!(config.search_dirs.is_empty());
+    }
+
+    #[test]
+    fn config_dir_path() {
+        let dir = config_dir();
+        // Should succeed on any system with a home directory
+        if let Some(dir) = dir {
+            assert!(dir.ends_with(".config/freespace"));
+        }
+    }
+
+    #[test]
+    fn default_modules_dir_path() {
+        let dir = default_modules_dir();
+        if let Some(dir) = dir {
+            assert!(dir.ends_with("modules"));
+        }
+    }
+}

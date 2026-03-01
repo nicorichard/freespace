@@ -1,0 +1,9 @@
+name = "test-single"
+version = "1.0.0"
+description = "A single test module"
+author = "tester"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "~/test-cache"
+description = "Test cache directory"

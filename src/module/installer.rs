@@ -39,13 +39,11 @@ pub struct InstallResult {
 }
 
 /// Layout of a source directory.
-enum RepoLayout {
+pub(crate) enum RepoLayout {
     /// module.toml at the root
     SingleModule { module: Module },
     /// Subdirectories each containing module.toml
-    MultiModule {
-        modules: Vec<(String, Module)>,
-    },
+    MultiModule { modules: Vec<(String, Module)> },
 }
 
 /// Install modules from a source identifier string.
@@ -162,7 +160,7 @@ fn install_from_local(
 /// Create a symlink from dest -> src, removing any existing dest first.
 fn symlink_module(src: &Path, dest: &Path) -> Result<(), InstallError> {
     if dest.exists() || dest.symlink_metadata().is_ok() {
-        if dest.is_dir() && !dest.symlink_metadata().map_or(false, |m| m.is_symlink()) {
+        if dest.is_dir() && !dest.symlink_metadata().is_ok_and(|m| m.is_symlink()) {
             fs::remove_dir_all(dest)
         } else {
             fs::remove_file(dest)
@@ -265,10 +263,7 @@ fn modules_available_names(source_dir: &Path) -> String {
 
 /// Show an interactive multi-select prompt for choosing modules to install.
 fn prompt_module_selection(modules: &[(String, Module)]) -> Result<Vec<usize>, InstallError> {
-    let items: Vec<String> = modules
-        .iter()
-        .map(|(_, m)| m.name.clone())
-        .collect();
+    let items: Vec<String> = modules.iter().map(|(_, m)| m.name.clone()).collect();
 
     let defaults: Vec<bool> = vec![true; items.len()];
 
@@ -317,9 +312,9 @@ fn clone_repo(source: &SourceIdentifier) -> Result<(PathBuf, String), InstallErr
 
     cmd.arg(clone_url).arg(&temp_dir);
 
-    let output = cmd.output().map_err(|e| {
-        InstallError::CloneFailed(format!("failed to run git: {}", e))
-    })?;
+    let output = cmd
+        .output()
+        .map_err(|e| InstallError::CloneFailed(format!("failed to run git: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -333,13 +328,15 @@ fn clone_repo(source: &SourceIdentifier) -> Result<(PathBuf, String), InstallErr
         .output()
         .map_err(|e| InstallError::CloneFailed(format!("failed to get commit SHA: {}", e)))?;
 
-    let commit_sha = String::from_utf8_lossy(&rev_output.stdout).trim().to_string();
+    let commit_sha = String::from_utf8_lossy(&rev_output.stdout)
+        .trim()
+        .to_string();
 
     Ok((temp_dir, commit_sha))
 }
 
 /// Detect whether a directory is a single-module or multi-module layout.
-fn detect_layout(source_dir: &Path) -> Result<RepoLayout, InstallError> {
+pub(crate) fn detect_layout(source_dir: &Path) -> Result<RepoLayout, InstallError> {
     // Check for root-level module.toml first
     let root_manifest = source_dir.join("module.toml");
     if root_manifest.exists() {
@@ -359,18 +356,14 @@ fn detect_layout(source_dir: &Path) -> Result<RepoLayout, InstallError> {
         }
 
         // Skip .git directory
-        if path.file_name().map_or(false, |n| n == ".git") {
+        if path.file_name().is_some_and(|n| n == ".git") {
             continue;
         }
 
         let manifest_path = path.join("module.toml");
         if manifest_path.exists() {
             let module = parse_manifest(&manifest_path)?;
-            let dir_name = path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
+            let dir_name = path.file_name().unwrap().to_string_lossy().to_string();
             modules.push((dir_name, module));
         }
     }
@@ -387,11 +380,9 @@ fn detect_layout(source_dir: &Path) -> Result<RepoLayout, InstallError> {
 
 /// Parse a module.toml file.
 fn parse_manifest(path: &Path) -> Result<Module, InstallError> {
-    let content = fs::read_to_string(path).map_err(|e| {
-        InstallError::ManifestParseError {
-            path: path.display().to_string(),
-            reason: e.to_string(),
-        }
+    let content = fs::read_to_string(path).map_err(|e| InstallError::ManifestParseError {
+        path: path.display().to_string(),
+        reason: e.to_string(),
     })?;
 
     toml::from_str(&content).map_err(|e| InstallError::ManifestParseError {
@@ -401,7 +392,7 @@ fn parse_manifest(path: &Path) -> Result<Module, InstallError> {
 }
 
 /// Copy a module directory to the install destination and write source.toml.
-fn install_module_dir(
+pub(crate) fn install_module_dir(
     src: &Path,
     dest: &Path,
     source_info: &SourceInfo,
@@ -433,11 +424,11 @@ fn install_module_dir(
     let source_file = SourceFile {
         source: source_info.clone(),
     };
-    let source_toml = toml::to_string_pretty(&source_file)
-        .map_err(|e| InstallError::Other(anyhow::anyhow!("failed to serialize source.toml: {}", e)))?;
-    fs::write(dest.join("source.toml"), source_toml).map_err(|e| {
-        InstallError::Other(anyhow::anyhow!("failed to write source.toml: {}", e))
+    let source_toml = toml::to_string_pretty(&source_file).map_err(|e| {
+        InstallError::Other(anyhow::anyhow!("failed to serialize source.toml: {}", e))
     })?;
+    fs::write(dest.join("source.toml"), source_toml)
+        .map_err(|e| InstallError::Other(anyhow::anyhow!("failed to write source.toml: {}", e)))?;
 
     Ok(InstallResult {
         name: module.name.clone(),
@@ -448,7 +439,7 @@ fn install_module_dir(
 }
 
 /// Recursively copy a directory, skipping `.git/`.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
 
     for entry in fs::read_dir(src)? {
@@ -499,4 +490,233 @@ pub fn read_source_info(module_dir: &Path) -> Option<SourceInfo> {
     let content = fs::read_to_string(path).ok()?;
     let source_file: SourceFile = toml::from_str(&content).ok()?;
     Some(source_file.source)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_module_toml(dir: &Path, name: &str) {
+        let toml = format!(
+            r#"name = "{}"
+version = "1.0.0"
+description = "Test"
+author = "tester"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "~/test"
+"#,
+            name
+        );
+        fs::write(dir.join("module.toml"), toml).unwrap();
+    }
+
+    // --- detect_layout ---
+
+    #[test]
+    fn detect_layout_single_module() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        write_module_toml(tmp.path(), "single");
+
+        match detect_layout(tmp.path()).unwrap() {
+            RepoLayout::SingleModule { module } => {
+                assert_eq!(module.name, "single");
+            }
+            _ => panic!("expected SingleModule"),
+        }
+    }
+
+    #[test]
+    fn detect_layout_multi_module() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let alpha = tmp.path().join("alpha");
+        fs::create_dir(&alpha).unwrap();
+        write_module_toml(&alpha, "alpha-mod");
+
+        let beta = tmp.path().join("beta");
+        fs::create_dir(&beta).unwrap();
+        write_module_toml(&beta, "beta-mod");
+
+        match detect_layout(tmp.path()).unwrap() {
+            RepoLayout::MultiModule { modules } => {
+                assert_eq!(modules.len(), 2);
+                assert_eq!(modules[0].0, "alpha");
+                assert_eq!(modules[1].0, "beta");
+            }
+            _ => panic!("expected MultiModule"),
+        }
+    }
+
+    #[test]
+    fn detect_layout_empty_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let result = detect_layout(tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn detect_layout_skips_git_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let git_dir = tmp.path().join(".git");
+        fs::create_dir(&git_dir).unwrap();
+        write_module_toml(&git_dir, "should-skip");
+
+        let alpha = tmp.path().join("alpha");
+        fs::create_dir(&alpha).unwrap();
+        write_module_toml(&alpha, "alpha-mod");
+
+        match detect_layout(tmp.path()).unwrap() {
+            RepoLayout::MultiModule { modules } => {
+                assert_eq!(modules.len(), 1);
+                assert_eq!(modules[0].0, "alpha");
+            }
+            _ => panic!("expected MultiModule"),
+        }
+    }
+
+    // --- install_module_dir ---
+
+    #[test]
+    fn install_module_dir_copies_and_writes_source() {
+        let src_tmp = tempfile::TempDir::new().unwrap();
+        write_module_toml(src_tmp.path(), "test-install");
+        fs::write(src_tmp.path().join("extra.txt"), "extra data").unwrap();
+
+        let dest_tmp = tempfile::TempDir::new().unwrap();
+        let dest = dest_tmp.path().join("test-install");
+
+        let source_info = SourceInfo {
+            repository: "github:user/repo".to_string(),
+            git_ref: Some("v1.0".to_string()),
+            commit: "abc123".to_string(),
+            path: None,
+            installed_at: 1000,
+        };
+
+        let module = Module {
+            name: "test-install".to_string(),
+            version: "1.0.0".to_string(),
+            description: "Test".to_string(),
+            author: "tester".to_string(),
+            platforms: vec!["macos".to_string()],
+            targets: vec![],
+        };
+
+        let result = install_module_dir(src_tmp.path(), &dest, &source_info, &module).unwrap();
+        assert_eq!(result.name, "test-install");
+        assert!(!result.was_upgrade);
+        assert!(dest.join("module.toml").exists());
+        assert!(dest.join("extra.txt").exists());
+        assert!(dest.join("source.toml").exists());
+
+        let info = read_source_info(&dest).unwrap();
+        assert_eq!(info.repository, "github:user/repo");
+        assert_eq!(info.commit, "abc123");
+    }
+
+    #[test]
+    fn install_module_dir_upgrade_replaces() {
+        let src_tmp = tempfile::TempDir::new().unwrap();
+        write_module_toml(src_tmp.path(), "upgrade");
+
+        let dest_tmp = tempfile::TempDir::new().unwrap();
+        let dest = dest_tmp.path().join("upgrade");
+
+        // Create existing installation
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("old-file.txt"), "old").unwrap();
+
+        let source_info = SourceInfo {
+            repository: "github:user/repo".to_string(),
+            git_ref: None,
+            commit: "def456".to_string(),
+            path: None,
+            installed_at: 2000,
+        };
+        let module = Module {
+            name: "upgrade".to_string(),
+            version: "2.0.0".to_string(),
+            description: "Test".to_string(),
+            author: "tester".to_string(),
+            platforms: vec![],
+            targets: vec![],
+        };
+
+        let result = install_module_dir(src_tmp.path(), &dest, &source_info, &module).unwrap();
+        assert!(result.was_upgrade);
+        assert!(!dest.join("old-file.txt").exists()); // old file removed
+        assert!(dest.join("module.toml").exists());
+    }
+
+    // --- Local install ---
+
+    #[test]
+    fn install_local_creates_symlink() {
+        let src_tmp = tempfile::TempDir::new().unwrap();
+        write_module_toml(src_tmp.path(), "local-test");
+
+        let dest_tmp = tempfile::TempDir::new().unwrap();
+
+        let source = SourceIdentifier::Local {
+            path: src_tmp.path().to_path_buf(),
+        };
+        let results = install_from_local(&source, src_tmp.path(), dest_tmp.path()).unwrap();
+        assert_eq!(results.len(), 1);
+
+        // Verify symlink was created
+        let installed = &results[0].installed_to;
+        assert!(installed.symlink_metadata().unwrap().is_symlink());
+    }
+
+    #[test]
+    fn install_local_nonexistent_path() {
+        let dest_tmp = tempfile::TempDir::new().unwrap();
+        let bad_path = Path::new("/nonexistent/module/path/xyz123");
+        let source = SourceIdentifier::Local {
+            path: bad_path.to_path_buf(),
+        };
+        let result = install_from_local(&source, bad_path, dest_tmp.path());
+        assert!(result.is_err());
+    }
+
+    // --- copy_dir_recursive ---
+
+    #[test]
+    fn copy_dir_recursive_skips_git() {
+        let src = tempfile::TempDir::new().unwrap();
+        fs::create_dir(src.path().join(".git")).unwrap();
+        fs::write(src.path().join(".git").join("HEAD"), "ref").unwrap();
+        fs::write(src.path().join("file.txt"), "data").unwrap();
+
+        let dst = tempfile::TempDir::new().unwrap();
+        let dst_path = dst.path().join("copy");
+        copy_dir_recursive(src.path(), &dst_path).unwrap();
+
+        assert!(dst_path.join("file.txt").exists());
+        assert!(!dst_path.join(".git").exists());
+    }
+
+    // --- read_source_info ---
+
+    #[test]
+    fn read_source_info_valid() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let toml_content = r#"
+[source]
+repository = "github:user/repo"
+commit = "abc123"
+installed_at = 1000
+"#;
+        fs::write(tmp.path().join("source.toml"), toml_content).unwrap();
+        let info = read_source_info(tmp.path()).unwrap();
+        assert_eq!(info.repository, "github:user/repo");
+        assert_eq!(info.commit, "abc123");
+    }
+
+    #[test]
+    fn read_source_info_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(read_source_info(tmp.path()).is_none());
+    }
 }

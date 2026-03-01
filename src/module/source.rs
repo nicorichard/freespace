@@ -170,3 +170,181 @@ pub struct SourceInfo {
 pub struct SourceFile {
     pub source: SourceInfo,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- SourceIdentifier::parse() ---
+
+    #[test]
+    fn parse_github_basic() {
+        let src = SourceIdentifier::parse("github:user/repo").unwrap();
+        match src {
+            SourceIdentifier::GitHub {
+                owner,
+                repo,
+                git_ref,
+                module_path,
+            } => {
+                assert_eq!(owner, "user");
+                assert_eq!(repo, "repo");
+                assert!(git_ref.is_none());
+                assert!(module_path.is_none());
+            }
+            _ => panic!("expected GitHub variant"),
+        }
+    }
+
+    #[test]
+    fn parse_github_with_ref() {
+        let src = SourceIdentifier::parse("github:user/repo@v1.0.0").unwrap();
+        match src {
+            SourceIdentifier::GitHub { git_ref, .. } => {
+                assert_eq!(git_ref.as_deref(), Some("v1.0.0"));
+            }
+            _ => panic!("expected GitHub variant"),
+        }
+    }
+
+    #[test]
+    fn parse_github_with_module() {
+        let src = SourceIdentifier::parse("github:user/repo#my-module").unwrap();
+        match src {
+            SourceIdentifier::GitHub { module_path, .. } => {
+                assert_eq!(module_path.as_deref(), Some("my-module"));
+            }
+            _ => panic!("expected GitHub variant"),
+        }
+    }
+
+    #[test]
+    fn parse_github_with_ref_and_module() {
+        let src = SourceIdentifier::parse("github:user/repo@main#docker").unwrap();
+        match src {
+            SourceIdentifier::GitHub {
+                owner,
+                repo,
+                git_ref,
+                module_path,
+            } => {
+                assert_eq!(owner, "user");
+                assert_eq!(repo, "repo");
+                assert_eq!(git_ref.as_deref(), Some("main"));
+                assert_eq!(module_path.as_deref(), Some("docker"));
+            }
+            _ => panic!("expected GitHub variant"),
+        }
+    }
+
+    #[test]
+    fn parse_local_absolute_path() {
+        let src = SourceIdentifier::parse("/tmp/my-module").unwrap();
+        match src {
+            SourceIdentifier::Local { path } => {
+                assert_eq!(path, PathBuf::from("/tmp/my-module"));
+            }
+            _ => panic!("expected Local variant"),
+        }
+    }
+
+    #[test]
+    fn parse_local_relative_path() {
+        let src = SourceIdentifier::parse("./modules/test").unwrap();
+        match src {
+            SourceIdentifier::Local { path } => {
+                assert_eq!(path, PathBuf::from("./modules/test"));
+            }
+            _ => panic!("expected Local variant"),
+        }
+    }
+
+    #[test]
+    fn parse_github_missing_repo() {
+        let result = SourceIdentifier::parse("github:user");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_github_empty_owner() {
+        let result = SourceIdentifier::parse("github:/repo");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_github_empty_repo() {
+        let result = SourceIdentifier::parse("github:user/");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_github_empty_ref() {
+        let result = SourceIdentifier::parse("github:user/repo@");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_github_empty_module() {
+        let result = SourceIdentifier::parse("github:user/repo#");
+        assert!(result.is_err());
+    }
+
+    // --- clone_url ---
+
+    #[test]
+    fn clone_url_github() {
+        let src = SourceIdentifier::parse("github:user/repo").unwrap();
+        assert_eq!(
+            src.clone_url(),
+            Some("git@github.com:user/repo.git".to_string())
+        );
+    }
+
+    #[test]
+    fn clone_url_local_is_none() {
+        let src = SourceIdentifier::parse("/tmp/foo").unwrap();
+        assert_eq!(src.clone_url(), None);
+    }
+
+    // --- default_dir_name ---
+
+    #[test]
+    fn default_dir_name_github() {
+        let src = SourceIdentifier::parse("github:user/my-modules").unwrap();
+        assert_eq!(src.default_dir_name(), "my-modules");
+    }
+
+    #[test]
+    fn default_dir_name_local() {
+        let src = SourceIdentifier::parse("/home/user/my-module").unwrap();
+        assert_eq!(src.default_dir_name(), "my-module");
+    }
+
+    // --- Display roundtrip ---
+
+    #[test]
+    fn display_github_full() {
+        let src = SourceIdentifier::parse("github:user/repo@v1#mod").unwrap();
+        assert_eq!(src.to_string(), "github:user/repo@v1#mod");
+    }
+
+    #[test]
+    fn display_local() {
+        let src = SourceIdentifier::parse("/tmp/test").unwrap();
+        assert_eq!(src.to_string(), "/tmp/test");
+    }
+
+    // --- repository_string ---
+
+    #[test]
+    fn repository_string_github() {
+        let src = SourceIdentifier::parse("github:user/repo@v1#mod").unwrap();
+        assert_eq!(src.repository_string(), "github:user/repo");
+    }
+
+    #[test]
+    fn repository_string_local() {
+        let src = SourceIdentifier::parse("/tmp/test").unwrap();
+        assert_eq!(src.repository_string(), "local:/tmp/test");
+    }
+}

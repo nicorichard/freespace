@@ -1,0 +1,9 @@
+name = "beta-module"
+version = "2.0.0"
+description = "Beta test module"
+author = "tester"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "~/beta-cache"
+description = "Beta cache"
