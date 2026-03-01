@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use crate::config::AppConfig;
 use crate::module::manifest::Module;
+use crate::tui::theme::Theme;
 
 /// Central application state shared across all TUI views.
 pub struct App {
@@ -14,6 +15,7 @@ pub struct App {
     pub selected_items: HashSet<PathBuf>,
     pub scan_status: ScanStatus,
     pub config: AppConfig,
+    pub theme: Theme,
 }
 
 /// Which view is currently displayed.
