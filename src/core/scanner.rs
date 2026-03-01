@@ -24,6 +24,12 @@ pub enum ScanMessage {
         module_index: usize,
         error: String,
     },
+    /// A drill-in item's size has been calculated.
+    DrillItemSized {
+        drill_depth: usize,
+        item_index: usize,
+        size: u64,
+    },
     /// All modules have been scanned.
     ScanComplete,
 }
@@ -50,7 +56,7 @@ fn expand_target_path(pattern: &str) -> Vec<PathBuf> {
 }
 
 /// Calculate the size of a file or directory.
-fn calculate_size(path: &Path) -> u64 {
+pub fn calculate_size(path: &Path) -> u64 {
     if path.is_file() {
         std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
     } else if path.is_dir() {
@@ -90,7 +96,7 @@ pub fn start_scan(modules: Vec<Module>, tx: mpsc::UnboundedSender<ScanMessage>) 
                         name,
                         path,
                         size: Some(size),
-                        _item_type: item_type,
+                        item_type,
                     };
 
                     if tx.send(ScanMessage::ItemDiscovered { module_index, item }).is_err() {

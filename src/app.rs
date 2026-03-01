@@ -1,7 +1,8 @@
 // Application state and event loop.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -41,8 +42,12 @@ pub struct App {
     pub filter_cursor: usize,
     /// Receiver for scan messages from the background scanner.
     scan_rx: mpsc::UnboundedReceiver<ScanMessage>,
+    /// Sender for scan messages (kept for drill-in size calculations).
+    scan_tx: mpsc::UnboundedSender<ScanMessage>,
     /// Counter incremented each event loop tick, used for spinner animation.
     pub tick_count: usize,
+    /// Stack of drill-in levels for directory exploration.
+    pub drill_stack: Vec<DrillLevel>,
 }
 
 impl App {
@@ -60,7 +65,7 @@ impl App {
         let scan_status = if manifests.is_empty() {
             ScanStatus::Complete
         } else {
-            scanner::start_scan(manifests, tx);
+            scanner::start_scan(manifests, tx.clone());
             ScanStatus::Scanning
         };
 
@@ -78,7 +83,9 @@ impl App {
             filter_query: String::new(),
             filter_cursor: 0,
             scan_rx: rx,
+            scan_tx: tx,
             tick_count: 0,
+            drill_stack: Vec::new(),
         }
     }
 
@@ -175,11 +182,99 @@ impl App {
                         ms.status = ModuleStatus::Error(error);
                     }
                 }
+                ScanMessage::DrillItemSized {
+                    drill_depth,
+                    item_index,
+                    size,
+                } => {
+                    // Update drill item size if the drill level still matches
+                    if let Some(level) = self.drill_stack.get_mut(drill_depth) {
+                        if let Some(item) = level.items.get_mut(item_index) {
+                            item.size = Some(size);
+                        }
+                    }
+                }
                 ScanMessage::ScanComplete => {
                     self.scan_status = ScanStatus::Complete;
                 }
             }
         }
+    }
+
+    /// Return the items for the current detail view level.
+    /// If drilled in, returns the drill level's items; otherwise the module's items.
+    pub fn current_detail_items(&self, module_idx: usize) -> &[Item] {
+        if let Some(level) = self.drill_stack.last() {
+            &level.items
+        } else {
+            &self.modules[module_idx].items
+        }
+    }
+
+    /// List directory children as Items (instant, sizes are None).
+    fn enumerate_directory(path: &Path) -> Vec<Item> {
+        let mut items = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+                let name = entry_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| entry_path.display().to_string());
+                let item_type = if entry_path.is_dir() {
+                    ItemType::Directory
+                } else {
+                    ItemType::File
+                };
+                items.push(Item {
+                    name,
+                    path: entry_path,
+                    size: None,
+                    item_type,
+                });
+            }
+        }
+        items
+    }
+
+    /// Open a path in the system file manager (Finder on macOS).
+    fn open_in_file_manager(path: &Path) {
+        let target = if path.is_file() {
+            path.parent().unwrap_or(path)
+        } else {
+            path
+        };
+        let _ = Command::new("open")
+            .arg(target)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+
+    /// Spawn a background task to calculate sizes for drill-in items.
+    fn spawn_drill_size_scan(&self, drill_depth: usize) {
+        let tx = self.scan_tx.clone();
+        let items: Vec<PathBuf> = self.drill_stack[drill_depth]
+            .items
+            .iter()
+            .map(|i| i.path.clone())
+            .collect();
+        tokio::task::spawn_blocking(move || {
+            for (item_index, path) in items.iter().enumerate() {
+                let size = scanner::calculate_size(path);
+                if tx
+                    .send(ScanMessage::DrillItemSized {
+                        drill_depth,
+                        item_index,
+                        size,
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
     }
 
     /// Dispatch key events based on the current view.
@@ -367,30 +462,63 @@ impl App {
             // Toggle selection on highlighted item
             KeyCode::Char(' ') => {
                 if let Some(&item_idx) = sorted.get(self.selected_index) {
-                    let path = self.modules[module_idx].items[item_idx].path.clone();
+                    let items = self.current_detail_items(module_idx);
+                    let path = items[item_idx].path.clone();
                     if !self.selected_items.remove(&path) {
                         self.selected_items.insert(path);
                     }
                 }
             }
-            // Select all items in current module
+            // Select all visible items
             KeyCode::Char('a') => {
-                for item in &self.modules[module_idx].items {
-                    self.selected_items.insert(item.path.clone());
+                let paths: Vec<PathBuf> = self.current_detail_items(module_idx)
+                    .iter().map(|item| item.path.clone()).collect();
+                for path in paths {
+                    self.selected_items.insert(path);
                 }
             }
-            // Deselect all items in current module
+            // Deselect all visible items
             KeyCode::Char('n') => {
-                for item in &self.modules[module_idx].items {
-                    self.selected_items.remove(&item.path);
+                let paths: Vec<PathBuf> = self.current_detail_items(module_idx)
+                    .iter().map(|item| item.path.clone()).collect();
+                for path in paths {
+                    self.selected_items.remove(&path);
                 }
             }
-            // Transition to cleanup confirmation (if items selected)
-            KeyCode::Enter | KeyCode::Char('c') => {
+            // Enter: drill into directory, or cleanup if at top level
+            KeyCode::Enter => {
+                if let Some(&item_idx) = sorted.get(self.selected_index) {
+                    let items = self.current_detail_items(module_idx);
+                    if matches!(items[item_idx].item_type, ItemType::Directory) {
+                        let path = items[item_idx].path.clone();
+                        let children = Self::enumerate_directory(&path);
+                        let parent_selected_index = self.selected_index;
+                        self.drill_stack.push(DrillLevel {
+                            path,
+                            items: children,
+                            parent_selected_index,
+                        });
+                        self.clear_filter();
+                        self.selected_index = 0;
+                        let depth = self.drill_stack.len() - 1;
+                        self.spawn_drill_size_scan(depth);
+                    }
+                }
+            }
+            // c: cleanup
+            KeyCode::Char('c') => {
                 if !self.selected_items.is_empty() {
+                    self.drill_stack.clear();
                     self.previous_view = self.current_view;
                     self.current_view = View::CleanupConfirm;
                     self.selected_index = 0;
+                }
+            }
+            // Open in file manager
+            KeyCode::Char('o') => {
+                if let Some(&item_idx) = sorted.get(self.selected_index) {
+                    let items = self.current_detail_items(module_idx);
+                    Self::open_in_file_manager(&items[item_idx].path);
                 }
             }
             // Enter filter mode
@@ -400,22 +528,30 @@ impl App {
                 self.filter_cursor = 0;
                 self.selected_index = 0;
             }
-            // Esc: clear filter first, then go back
+            // Esc: clear filter → pop drill stack → go to ModuleList
             KeyCode::Esc => {
                 if !self.filter_query.is_empty() {
                     self.clear_filter();
                     self.selected_index = 0;
+                } else if let Some(level) = self.drill_stack.pop() {
+                    self.selected_index = level.parent_selected_index;
+                    self.clear_filter();
                 } else {
                     self.clear_filter();
                     self.current_view = View::ModuleList;
                     self.selected_index = 0;
                 }
             }
-            // Backspace: go back to module list
+            // Backspace: pop drill stack if drilled in, else go back to module list
             KeyCode::Backspace => {
-                self.clear_filter();
-                self.current_view = View::ModuleList;
-                self.selected_index = 0;
+                if let Some(level) = self.drill_stack.pop() {
+                    self.selected_index = level.parent_selected_index;
+                    self.clear_filter();
+                } else {
+                    self.clear_filter();
+                    self.current_view = View::ModuleList;
+                    self.selected_index = 0;
+                }
             }
             // Open help overlay
             KeyCode::Char('?') => {
@@ -427,22 +563,60 @@ impl App {
     }
 
     fn handle_key_cleanup_confirm(&mut self, key: KeyCode) {
+        let count = views::cleanup_confirm::filtered_confirm_item_count(self);
+
         match key {
+            // Navigate down
+            KeyCode::Char('j') | KeyCode::Down => {
+                if count > 0 {
+                    self.selected_index = (self.selected_index + 1) % count;
+                }
+            }
+            // Navigate up
+            KeyCode::Char('k') | KeyCode::Up => {
+                if count > 0 {
+                    self.selected_index = if self.selected_index == 0 {
+                        count - 1
+                    } else {
+                        self.selected_index - 1
+                    };
+                }
+            }
             // Move to trash (reversible)
             KeyCode::Char('t') => {
                 self.perform_cleanup(false);
+                self.clear_filter();
                 self.current_view = self.previous_view;
                 self.selected_index = 0;
             }
             // Permanently delete
             KeyCode::Char('d') => {
                 self.perform_cleanup(true);
+                self.clear_filter();
                 self.current_view = self.previous_view;
                 self.selected_index = 0;
             }
             // Cancel and return to previous view
-            KeyCode::Char('n') | KeyCode::Esc => {
+            KeyCode::Char('n') => {
+                self.clear_filter();
                 self.current_view = self.previous_view;
+                self.selected_index = 0;
+            }
+            // Esc: clear filter first, then close dialog
+            KeyCode::Esc => {
+                if !self.filter_query.is_empty() {
+                    self.clear_filter();
+                    self.selected_index = 0;
+                } else {
+                    self.current_view = self.previous_view;
+                    self.selected_index = 0;
+                }
+            }
+            // Enter filter mode
+            KeyCode::Char('/') => {
+                self.filter_active = true;
+                self.filter_query.clear();
+                self.filter_cursor = 0;
                 self.selected_index = 0;
             }
             _ => {}
@@ -574,13 +748,20 @@ pub struct Item {
     pub name: String,
     pub path: PathBuf,
     pub size: Option<u64>,
-    pub _item_type: ItemType,
+    pub item_type: ItemType,
 }
 
 /// The type of a discovered filesystem item.
 pub enum ItemType {
     File,
     Directory,
+}
+
+/// A level in the drill-in directory exploration stack.
+pub struct DrillLevel {
+    pub path: PathBuf,
+    pub items: Vec<Item>,
+    pub parent_selected_index: usize,
 }
 
 /// Sort mode for the module list.

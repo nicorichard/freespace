@@ -1,3 +1,5 @@
+pub mod installer;
 pub mod manifest;
-pub mod runtime;
 pub mod manager;
+pub mod runtime;
+pub mod source;
