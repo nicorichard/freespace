@@ -79,4 +79,13 @@ Modules are declarative TOML manifests — no code execution.
 - Minimal test coverage (size_fmt unit tests)
 - No CI/CD pipelines
 
+## Quality Requirements
+
+- ALL work cannot be considered complete until it passes quality checks
+  - Formatted with `cargo fmt`
+  - Compiles without warnings
+  - Passes all tests
+- Keep changes focused and minimal
+- Follow existing code patterns
+
 ## Codebase Patterns
