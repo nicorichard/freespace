@@ -86,6 +86,7 @@ fn render_keybindings(app: &App, frame: &mut Frame, area: Rect) {
         keybinding_row("Enter", "Open module details", key_style, desc_style),
         keybinding_row("Space", "Toggle module selection", key_style, desc_style),
         keybinding_row("s", "Cycle sort mode", key_style, desc_style),
+        keybinding_row("/", "Filter list", key_style, desc_style),
         keybinding_row("c", "Clean selected items", key_style, desc_style),
         Row::new(vec![Span::raw(""), Span::raw("")]),
         // Module Detail section
@@ -98,6 +99,7 @@ fn render_keybindings(app: &App, frame: &mut Frame, area: Rect) {
         keybinding_row("Space", "Toggle item selection", key_style, desc_style),
         keybinding_row("a", "Select all items", key_style, desc_style),
         keybinding_row("n", "Deselect all items", key_style, desc_style),
+        keybinding_row("/", "Filter list", key_style, desc_style),
         keybinding_row("Enter / c", "Clean selected items", key_style, desc_style),
         keybinding_row("Backspace / Esc", "Back to module list", key_style, desc_style),
         Row::new(vec![Span::raw(""), Span::raw("")]),

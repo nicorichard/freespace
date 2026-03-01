@@ -5,14 +5,16 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{App, ModuleStatus};
+use crate::app::{matches_filter, App, ModuleStatus};
 use crate::tui::widgets::{checkbox_str, format_size, format_size_or_placeholder, module_icon, CheckState};
 
 /// Compute item indices sorted by size descending.
 /// Items with known sizes sort before those still calculating (None).
 pub fn sorted_item_indices(app: &App, module_idx: usize) -> Vec<usize> {
     let items = &app.modules[module_idx].items;
-    let mut indices: Vec<usize> = (0..items.len()).collect();
+    let mut indices: Vec<usize> = (0..items.len())
+        .filter(|&i| matches_filter(&items[i].name, &app.filter_query))
+        .collect();
     indices.sort_by(|&a, &b| {
         let size_a = items[a].size;
         let size_b = items[b].size;
@@ -49,7 +51,7 @@ pub fn render(app: &App, frame: &mut Frame, module_idx: usize) {
 
     render_title_bar(app, frame, chunks[0], module_idx);
     render_items_table(app, frame, chunks[1], module_idx);
-    render_status_bar(app, frame, chunks[2]);
+    render_status_bar(app, frame, chunks[2], module_idx);
 }
 
 fn render_title_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
@@ -155,10 +157,36 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
     frame.render_stateful_widget(table, area, &mut state);
 }
 
-fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
-    let status = Paragraph::new(Line::from(vec![Span::styled(
-        " \u{2191}/\u{2193} navigate  Space select  a all  n none  Enter/c clean  Esc back  ? help  q quit ",
-        app.theme.style_normal(),
-    )]));
+fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
+    let line = if app.filter_active {
+        // Active filter input mode
+        Line::from(vec![
+            Span::styled(" / ", app.theme.style_size()),
+            Span::styled(&app.filter_query, app.theme.style_normal()),
+            Span::styled("\u{2588}", app.theme.style_size()),
+        ])
+    } else if !app.filter_query.is_empty() {
+        // Filter is set but not being edited
+        let sorted = sorted_item_indices(app, module_idx);
+        let total = app.modules[module_idx].items.len();
+        let shown = sorted.len();
+        Line::from(vec![
+            Span::styled(
+                format!(" filter: \"{}\" ({}/{})  ", app.filter_query, shown, total),
+                app.theme.style_size(),
+            ),
+            Span::styled(
+                "/ filter  Esc clear",
+                app.theme.style_normal(),
+            ),
+        ])
+    } else {
+        // Default status bar
+        Line::from(vec![Span::styled(
+            " \u{2191}/\u{2193} navigate  Space select  a all  n none  / filter  Enter/c clean  Esc back  ? help  q quit ",
+            app.theme.style_normal(),
+        )])
+    };
+    let status = Paragraph::new(line);
     frame.render_widget(status, area);
 }

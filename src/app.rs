@@ -34,6 +34,12 @@ pub struct App {
     pub should_quit: bool,
     /// Sort mode for the module list.
     pub sort_mode: SortMode,
+    /// Whether the user is currently typing in the filter bar.
+    pub filter_active: bool,
+    /// Current filter text (empty = no filter).
+    pub filter_query: String,
+    /// Cursor position within the filter query.
+    pub filter_cursor: usize,
     /// Receiver for scan messages from the background scanner.
     scan_rx: mpsc::UnboundedReceiver<ScanMessage>,
     /// Counter incremented each event loop tick, used for spinner animation.
@@ -70,6 +76,9 @@ impl App {
             previous_view: View::ModuleList,
             should_quit: false,
             sort_mode: SortMode::Default,
+            filter_active: false,
+            filter_query: String::new(),
+            filter_cursor: 0,
             scan_rx: rx,
             tick_count: 0,
         }
@@ -167,10 +176,20 @@ impl App {
 
     /// Dispatch key events based on the current view.
     fn handle_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
-        // Global: q or Ctrl+C quits from any view
-        if key == KeyCode::Char('q')
-            || (key == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL))
-        {
+        // Ctrl+C always quits, even during filter input
+        if key == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
+            self.should_quit = true;
+            return;
+        }
+
+        // If filter input is active, route to filter handler
+        if self.filter_active {
+            self.handle_key_filter(key);
+            return;
+        }
+
+        // Global: q quits from any view (but not during filter input)
+        if key == KeyCode::Char('q') {
             self.should_quit = true;
             return;
         }
@@ -183,38 +202,75 @@ impl App {
         }
     }
 
+    /// Handle key input while the filter bar is active.
+    fn handle_key_filter(&mut self, key: KeyCode) {
+        match key {
+            KeyCode::Esc => {
+                // Cancel: clear query and exit filter mode
+                self.filter_active = false;
+                self.filter_query.clear();
+                self.filter_cursor = 0;
+                self.selected_index = 0;
+            }
+            KeyCode::Enter => {
+                // Accept: keep query, exit filter mode
+                self.filter_active = false;
+                self.selected_index = 0;
+            }
+            KeyCode::Backspace => {
+                self.filter_query.pop();
+                self.filter_cursor = self.filter_query.len();
+                self.selected_index = 0;
+            }
+            KeyCode::Char(c) => {
+                self.filter_query.push(c);
+                self.filter_cursor = self.filter_query.len();
+                self.selected_index = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// Clear filter state (used on view transitions).
+    fn clear_filter(&mut self) {
+        self.filter_active = false;
+        self.filter_query.clear();
+        self.filter_cursor = 0;
+    }
+
     // Stub key handlers for each view — will be implemented in later stories.
 
     fn handle_key_module_list(&mut self, key: KeyCode) {
-        let count = self.modules.len();
-        if count == 0 {
-            return;
-        }
+        let sorted = views::module_list::sorted_module_indices(self);
+        let count = sorted.len();
 
         match key {
             // Navigate down
             KeyCode::Char('j') | KeyCode::Down => {
-                self.selected_index = (self.selected_index + 1) % count;
+                if count > 0 {
+                    self.selected_index = (self.selected_index + 1) % count;
+                }
             }
             // Navigate up
             KeyCode::Char('k') | KeyCode::Up => {
-                self.selected_index = if self.selected_index == 0 {
-                    count - 1
-                } else {
-                    self.selected_index - 1
-                };
+                if count > 0 {
+                    self.selected_index = if self.selected_index == 0 {
+                        count - 1
+                    } else {
+                        self.selected_index - 1
+                    };
+                }
             }
             // Enter detail view for selected module
             KeyCode::Enter => {
-                let sorted = views::module_list::sorted_module_indices(self);
                 if let Some(&module_idx) = sorted.get(self.selected_index) {
+                    self.clear_filter();
                     self.current_view = View::ModuleDetail(module_idx);
                     self.selected_index = 0;
                 }
             }
             // Toggle selection for all items in the focused module
             KeyCode::Char(' ') => {
-                let sorted = views::module_list::sorted_module_indices(self);
                 if let Some(&module_idx) = sorted.get(self.selected_index) {
                     let items = &self.modules[module_idx].items;
                     let all_selected = !items.is_empty()
@@ -250,9 +306,21 @@ impl App {
                     self.selected_index = 0;
                 }
             }
-            // Esc quits from the base screen
+            // Enter filter mode
+            KeyCode::Char('/') => {
+                self.filter_active = true;
+                self.filter_query.clear();
+                self.filter_cursor = 0;
+                self.selected_index = 0;
+            }
+            // Esc: clear filter first, then quit
             KeyCode::Esc => {
-                self.should_quit = true;
+                if !self.filter_query.is_empty() {
+                    self.clear_filter();
+                    self.selected_index = 0;
+                } else {
+                    self.should_quit = true;
+                }
             }
             _ => {}
         }
@@ -317,8 +385,27 @@ impl App {
                     self.selected_index = 0;
                 }
             }
-            // Return to module list view
-            KeyCode::Backspace | KeyCode::Esc => {
+            // Enter filter mode
+            KeyCode::Char('/') => {
+                self.filter_active = true;
+                self.filter_query.clear();
+                self.filter_cursor = 0;
+                self.selected_index = 0;
+            }
+            // Esc: clear filter first, then go back
+            KeyCode::Esc => {
+                if !self.filter_query.is_empty() {
+                    self.clear_filter();
+                    self.selected_index = 0;
+                } else {
+                    self.clear_filter();
+                    self.current_view = View::ModuleList;
+                    self.selected_index = 0;
+                }
+            }
+            // Backspace: go back to module list
+            KeyCode::Backspace => {
+                self.clear_filter();
                 self.current_view = View::ModuleList;
                 self.selected_index = 0;
             }
@@ -507,4 +594,12 @@ impl SortMode {
             SortMode::SizeDesc => "size",
         }
     }
+}
+
+/// Case-insensitive substring match for filtering lists.
+pub fn matches_filter(haystack: &str, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    haystack.to_lowercase().contains(&query.to_lowercase())
 }

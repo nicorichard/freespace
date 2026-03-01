@@ -5,12 +5,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{App, ModuleStatus, ScanStatus, SortMode};
+use crate::app::{matches_filter, App, ModuleStatus, ScanStatus, SortMode};
 use crate::tui::widgets::{checkbox_str, format_size, format_size_or_placeholder, module_icon, CheckState};
 
 /// Compute module indices sorted according to the current sort mode.
 pub fn sorted_module_indices(app: &App) -> Vec<usize> {
-    let mut indices: Vec<usize> = (0..app.modules.len()).collect();
+    let mut indices: Vec<usize> = (0..app.modules.len())
+        .filter(|&i| matches_filter(&app.modules[i].module.name, &app.filter_query))
+        .collect();
     match app.sort_mode {
         SortMode::Default => {
             // Insertion order — no sorting needed
@@ -213,13 +215,39 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
-    let sort_label = app.sort_mode.label();
-    let status = Paragraph::new(Line::from(vec![Span::styled(
-        format!(
-            " \u{2191}/\u{2193} navigate  Space select  Enter details  s sort ({})  c clean  ? help  q quit ",
-            sort_label
-        ),
-        app.theme.style_normal(),
-    )]));
+    let line = if app.filter_active {
+        // Active filter input mode
+        Line::from(vec![
+            Span::styled(" / ", app.theme.style_size()),
+            Span::styled(&app.filter_query, app.theme.style_normal()),
+            Span::styled("\u{2588}", app.theme.style_size()),
+        ])
+    } else if !app.filter_query.is_empty() {
+        // Filter is set but not being edited
+        let sorted = sorted_module_indices(app);
+        let total = app.modules.len();
+        let shown = sorted.len();
+        Line::from(vec![
+            Span::styled(
+                format!(" filter: \"{}\" ({}/{})  ", app.filter_query, shown, total),
+                app.theme.style_size(),
+            ),
+            Span::styled(
+                "/ filter  Esc clear",
+                app.theme.style_normal(),
+            ),
+        ])
+    } else {
+        // Default status bar
+        let sort_label = app.sort_mode.label();
+        Line::from(vec![Span::styled(
+            format!(
+                " \u{2191}/\u{2193} navigate  Space select  Enter details  s sort ({})  / filter  c clean  ? help  q quit ",
+                sort_label
+            ),
+            app.theme.style_normal(),
+        )])
+    };
+    let status = Paragraph::new(line);
     frame.render_widget(status, area);
 }
