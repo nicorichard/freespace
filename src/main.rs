@@ -48,19 +48,9 @@ fn main() -> anyhow::Result<()> {
             // Initialize terminal
             let mut terminal = tui::init()?;
 
-            // Placeholder: clear screen and wait for 'q' to quit
-            terminal.clear()?;
-
-            loop {
-                use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-                if event::poll(std::time::Duration::from_millis(250))? {
-                    if let Event::Key(key) = event::read()? {
-                        if key.kind == KeyEventKind::Press && key.code == KeyCode::Char('q') {
-                            break;
-                        }
-                    }
-                }
-            }
+            // Create app and run the main event loop
+            let mut app = app::App::new();
+            app.run(&mut terminal)?;
 
             // Restore terminal on normal exit
             tui::restore()?;

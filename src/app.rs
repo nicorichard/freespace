@@ -2,10 +2,20 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::Duration;
+
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::config::AppConfig;
 use crate::module::manifest::Module;
 use crate::tui::theme::Theme;
+use crate::tui::Tui;
+
+/// Tick rate for the event loop poll interval.
+const TICK_RATE: Duration = Duration::from_millis(250);
 
 /// Central application state shared across all TUI views.
 pub struct App {
@@ -16,6 +26,181 @@ pub struct App {
     pub scan_status: ScanStatus,
     pub config: AppConfig,
     pub theme: Theme,
+    /// Whether the application should exit.
+    pub should_quit: bool,
+}
+
+impl App {
+    /// Create a new App with default state.
+    pub fn new() -> Self {
+        Self {
+            modules: Vec::new(),
+            current_view: View::ModuleList,
+            selected_index: 0,
+            selected_items: HashSet::new(),
+            scan_status: ScanStatus::Idle,
+            config: AppConfig::default(),
+            theme: Theme::default(),
+            should_quit: false,
+        }
+    }
+
+    /// Run the main event loop: poll input -> update state -> render.
+    pub fn run(&mut self, terminal: &mut Tui) -> anyhow::Result<()> {
+        while !self.should_quit {
+            // Render the current view
+            terminal.draw(|frame| self.render(frame))?;
+
+            // Poll for input events with tick rate timeout
+            if event::poll(TICK_RATE)? {
+                match event::read()? {
+                    Event::Key(key) => {
+                        if key.kind == KeyEventKind::Press {
+                            self.handle_key(key.code);
+                        }
+                    }
+                    Event::Resize(_, _) => {
+                        // Re-render happens at the top of the next loop iteration
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Dispatch key events based on the current view.
+    fn handle_key(&mut self, key: KeyCode) {
+        // Global: q quits from any view
+        if key == KeyCode::Char('q') {
+            self.should_quit = true;
+            return;
+        }
+
+        match &self.current_view {
+            View::ModuleList => self.handle_key_module_list(key),
+            View::ModuleDetail(_) => self.handle_key_module_detail(key),
+            View::CleanupConfirm => self.handle_key_cleanup_confirm(key),
+            View::Help => self.handle_key_help(key),
+        }
+    }
+
+    // Stub key handlers for each view — will be implemented in later stories.
+
+    fn handle_key_module_list(&mut self, _key: KeyCode) {
+        // Will be implemented in US-012
+    }
+
+    fn handle_key_module_detail(&mut self, _key: KeyCode) {
+        // Will be implemented in US-014
+    }
+
+    fn handle_key_cleanup_confirm(&mut self, _key: KeyCode) {
+        // Will be implemented in US-016
+    }
+
+    fn handle_key_help(&mut self, _key: KeyCode) {
+        // Will be implemented in US-017
+    }
+
+    /// Render the appropriate view based on current_view.
+    fn render(&self, frame: &mut ratatui::Frame) {
+        match &self.current_view {
+            View::ModuleList => self.render_module_list(frame),
+            View::ModuleDetail(idx) => self.render_module_detail(frame, *idx),
+            View::CleanupConfirm => self.render_cleanup_confirm(frame),
+            View::Help => self.render_help(frame),
+        }
+    }
+
+    // Placeholder render functions — will be replaced by full view implementations.
+
+    fn render_module_list(&self, frame: &mut ratatui::Frame) {
+        let area = frame.area();
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .split(area);
+
+        // Title bar
+        let title = Paragraph::new(Line::from(vec![
+            Span::styled(" Freespace ", self.theme.style_header()),
+        ]))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(self.theme.style_border()),
+        );
+        frame.render_widget(title, chunks[0]);
+
+        // Main content — placeholder
+        let content = if self.modules.is_empty() {
+            Paragraph::new("No modules loaded. Press q to quit.")
+                .style(self.theme.style_normal())
+        } else {
+            Paragraph::new("Module list will be rendered here.")
+                .style(self.theme.style_normal())
+        };
+        let content_block = content.block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(self.theme.style_border()),
+        );
+        frame.render_widget(content_block, chunks[1]);
+
+        // Status bar
+        let status = Paragraph::new(Line::from(vec![
+            Span::styled(
+                " ↑/↓ navigate  Enter details  c clean  ? help  q quit ",
+                self.theme.style_normal(),
+            ),
+        ]));
+        frame.render_widget(status, chunks[2]);
+    }
+
+    fn render_module_detail(&self, frame: &mut ratatui::Frame, _module_idx: usize) {
+        let area = frame.area();
+        let placeholder = Paragraph::new("Module detail view — not yet implemented. Press q to quit.")
+            .style(self.theme.style_normal())
+            .block(
+                Block::default()
+                    .title(" Module Detail ")
+                    .borders(Borders::ALL)
+                    .border_style(self.theme.style_border()),
+            );
+        frame.render_widget(placeholder, area);
+    }
+
+    fn render_cleanup_confirm(&self, frame: &mut ratatui::Frame) {
+        let area = frame.area();
+        let placeholder = Paragraph::new("Cleanup confirmation — not yet implemented. Press q to quit.")
+            .style(self.theme.style_normal())
+            .block(
+                Block::default()
+                    .title(" Cleanup Preview ")
+                    .borders(Borders::ALL)
+                    .border_style(self.theme.style_border()),
+            );
+        frame.render_widget(placeholder, area);
+    }
+
+    fn render_help(&self, frame: &mut ratatui::Frame) {
+        let area = frame.area();
+        let placeholder = Paragraph::new("Help overlay — not yet implemented. Press q to quit.")
+            .style(self.theme.style_normal())
+            .block(
+                Block::default()
+                    .title(" Help ")
+                    .borders(Borders::ALL)
+                    .border_style(self.theme.style_border()),
+            );
+        frame.render_widget(placeholder, area);
+    }
 }
 
 /// Which view is currently displayed.
