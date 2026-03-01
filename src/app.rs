@@ -185,17 +185,8 @@ impl App {
         views::module_list::render(self, frame);
     }
 
-    fn render_module_detail(&self, frame: &mut ratatui::Frame, _module_idx: usize) {
-        let area = frame.area();
-        let placeholder = Paragraph::new("Module detail view — not yet implemented. Press q to quit.")
-            .style(self.theme.style_normal())
-            .block(
-                Block::default()
-                    .title(" Module Detail ")
-                    .borders(Borders::ALL)
-                    .border_style(self.theme.style_border()),
-            );
-        frame.render_widget(placeholder, area);
+    fn render_module_detail(&self, frame: &mut ratatui::Frame, module_idx: usize) {
+        views::module_detail::render(self, frame, module_idx);
     }
 
     fn render_cleanup_confirm(&self, frame: &mut ratatui::Frame) {
