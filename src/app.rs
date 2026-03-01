@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::config::AppConfig;
 use crate::core::cleaner;
@@ -149,6 +148,7 @@ impl App {
             }
             // Open help overlay
             KeyCode::Char('?') => {
+                self.previous_view = self.current_view;
                 self.current_view = View::Help;
             }
             // Transition to cleanup confirmation if items are selected
@@ -229,6 +229,7 @@ impl App {
             }
             // Open help overlay
             KeyCode::Char('?') => {
+                self.previous_view = self.current_view;
                 self.current_view = View::Help;
             }
             _ => {}
@@ -285,8 +286,14 @@ impl App {
         self.selected_items.clear();
     }
 
-    fn handle_key_help(&mut self, _key: KeyCode) {
-        // Will be implemented in US-017
+    fn handle_key_help(&mut self, key: KeyCode) {
+        match key {
+            KeyCode::Char('?') | KeyCode::Esc => {
+                self.current_view = self.previous_view;
+                self.selected_index = 0;
+            }
+            _ => {}
+        }
     }
 
     /// Render the appropriate view based on current_view.
@@ -314,16 +321,7 @@ impl App {
     }
 
     fn render_help(&self, frame: &mut ratatui::Frame) {
-        let area = frame.area();
-        let placeholder = Paragraph::new("Help overlay — not yet implemented. Press q to quit.")
-            .style(self.theme.style_normal())
-            .block(
-                Block::default()
-                    .title(" Help ")
-                    .borders(Borders::ALL)
-                    .border_style(self.theme.style_border()),
-            );
-        frame.render_widget(placeholder, area);
+        views::help::render(self, frame);
     }
 }
 
