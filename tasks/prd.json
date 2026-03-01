@@ -1,0 +1,349 @@
+{
+  "project": "Freespace",
+  "branchName": "ralph/freespace-tui-mvp",
+  "description": "Freespace TUI Layer - Interactive terminal interface for browsing and cleaning disk space consumers with ratatui + crossterm",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Initialize Cargo project with dependencies",
+      "description": "As a developer, I need a properly configured Rust project so that all required crates are available for building the application.",
+      "acceptanceCriteria": [
+        "Cargo.toml exists with package name 'freespace', edition 2021",
+        "Dependencies declared: ratatui, crossterm, tokio (features: full), clap (features: derive), toml, serde (features: derive), walkdir, glob, humansize, anyhow, thiserror",
+        "cargo check passes with no errors",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Create project directory structure with stubs",
+      "description": "As a developer, I need the source file layout to match the architecture so that code is organized by subsystem.",
+      "acceptanceCriteria": [
+        "Directory structure created: src/main.rs, src/app.rs, src/config.rs",
+        "TUI files: src/tui/mod.rs, src/tui/theme.rs, src/tui/views/mod.rs, src/tui/views/module_list.rs, src/tui/views/module_detail.rs, src/tui/views/cleanup_confirm.rs, src/tui/views/help.rs, src/tui/widgets/mod.rs",
+        "Core files: src/core/mod.rs, src/core/engine.rs, src/core/scanner.rs, src/core/cleaner.rs",
+        "Module files: src/module/mod.rs, src/module/manifest.rs, src/module/runtime.rs, src/module/manager.rs",
+        "Each file contains a placeholder module declaration or minimal stub",
+        "cargo check passes",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Define core data types and app state",
+      "description": "As a developer, I need the central App struct and supporting types so that all TUI views share a consistent state model.",
+      "acceptanceCriteria": [
+        "App struct defined in src/app.rs with fields: modules (Vec<ModuleState>), current_view (View), selected_index (usize), selected_items (HashSet<PathBuf>), scan_status (ScanStatus), config (AppConfig)",
+        "View enum with variants: ModuleList, ModuleDetail(usize), CleanupConfirm, Help",
+        "ModuleState struct with fields: module (Module), items (Vec<Item>), total_size (Option<u64>), status (ModuleStatus)",
+        "ModuleStatus enum with variants: Loading, Discovering, Ready, Error(String)",
+        "ScanStatus enum with variants: Idle, Scanning, Complete",
+        "Item struct with fields: name (String), path (PathBuf), size (Option<u64>), item_type (ItemType)",
+        "ItemType enum with variants: File, Directory",
+        "cargo check passes",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Parse CLI arguments with clap",
+      "description": "As a user, I want to run freespace, freespace scan, and freespace module <subcommand> so that I can access different modes of the application.",
+      "acceptanceCriteria": [
+        "src/main.rs uses clap derive to define a Cli struct",
+        "Default command (no subcommand) launches the TUI",
+        "scan subcommand is defined (can be a stub that prints 'not yet implemented')",
+        "module subcommand group with sub-subcommands: install, list, remove, inspect (stubs OK)",
+        "--help and --version flags work",
+        "cargo run -- --help prints usage information",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Set up terminal initialization and restoration",
+      "description": "As a developer, I need crossterm terminal setup and teardown so that the TUI enters raw mode on start and restores the terminal cleanly on exit including panics.",
+      "acceptanceCriteria": [
+        "Function to initialize terminal: enable raw mode, enter alternate screen, enable mouse capture, create CrosstermBackend<Stdout>",
+        "Function to restore terminal: disable raw mode, leave alternate screen, disable mouse capture, show cursor",
+        "Panic hook installed that restores terminal before printing the panic message",
+        "Terminal is restored on normal exit (quit via q)",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Implement color theme and styling",
+      "description": "As a developer, I need a centralized theme definition so that all views use consistent colors and styles.",
+      "acceptanceCriteria": [
+        "src/tui/theme.rs defines a Theme struct with named color fields for: background, foreground, border, selected/highlight, header, size text, error/warning, module status indicators",
+        "Default theme uses 256-color palette values compatible across Terminal.app, iTerm2, Alacritty, Kitty, WezTerm",
+        "Helper functions to create ratatui::style::Style values from theme colors (e.g. theme.style_selected(), theme.style_header())",
+        "Theme is accessible from all view render functions via App state or passed as parameter",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Implement human-readable size formatting",
+      "description": "As a user, I want sizes displayed in human-readable format (e.g. 12.3 GB) so I can quickly understand the scale.",
+      "acceptanceCriteria": [
+        "Utility function in src/tui/widgets/ or shared module that formats u64 bytes into human-readable strings",
+        "Uses appropriate units: B, KB, MB, GB, TB",
+        "Shows one decimal place for GB and above (e.g. '12.3 GB'), no decimals for MB and below (e.g. '847 MB')",
+        "Items with None size display '...' or a spinner character",
+        "Items with size errors display 'N/A'",
+        "cargo test includes unit tests for the formatting function",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Create built-in module TOML manifests",
+      "description": "As a user, I want Freespace to ship with modules for common developer tools so it's useful immediately without installing community modules.",
+      "acceptanceCriteria": [
+        "modules/xcode-derived-data/module.toml targets ~/Library/Developer/Xcode/DerivedData/* (platform: macos)",
+        "modules/npm-cache/module.toml targets npm cache dir, ~/.yarn/cache, pnpm store (platform: macos, linux)",
+        "modules/homebrew-cache/module.toml targets ~/Library/Caches/Homebrew/* (platform: macos)",
+        "modules/docker/module.toml targets Docker Desktop disk images and build cache (platform: macos, linux)",
+        "modules/general-caches/module.toml targets ~/Library/Caches/* and ~/.cache/* (platform: macos, linux)",
+        "All manifests include: name, version, description, author, platforms, at least one [[targets]] entry",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Implement main event loop",
+      "description": "As a developer, I need the central event loop that polls for keyboard input, dispatches to the current view's handler, and triggers re-renders so that the TUI is interactive.",
+      "acceptanceCriteria": [
+        "Event loop in src/app.rs follows the pattern: poll input -> update state -> render",
+        "Uses crossterm::event::poll with a tick rate (e.g. 250ms) to allow async updates",
+        "q key exits the application from any view",
+        "Loop calls the appropriate render function based on current_view",
+        "Loop handles Event::Resize to re-render on terminal resize",
+        "cargo run shows a running TUI that can be quit with q",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Load built-in modules on startup",
+      "description": "As a developer, I need the application to discover and load built-in modules from the modules/ directory so they are available for scanning.",
+      "acceptanceCriteria": [
+        "On startup, the app scans a known path for built-in modules (embedded or relative to executable)",
+        "Each module.toml is parsed and deserialized into a Module struct",
+        "Modules for unsupported platforms are filtered out",
+        "Parsing errors for individual modules are logged as warnings but do not crash the app",
+        "Successfully loaded modules populate App.modules as ModuleState entries",
+        "cargo check passes",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Render module list view (main screen)",
+      "description": "As a user, I want to see a list of all detected space consumers with their aggregate sizes so I can understand where my disk space is going.",
+      "acceptanceCriteria": [
+        "src/tui/views/module_list.rs renders the main view",
+        "Title bar shows 'Freespace' and total aggregate size across all modules",
+        "Each row displays: module icon (emoji), module name, item count, aggregate size",
+        "Modules are sorted by total size descending",
+        "Currently selected row is visually highlighted",
+        "Modules still calculating size show a spinner or 'calculating...' indicator",
+        "Modules with errors show a warning indicator",
+        "Status bar at bottom shows keybinding hints: up/down navigate, Enter details, c clean, d dry-run, ? help",
+        "Layout adapts to terminal width (minimum 80 columns)",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Keyboard navigation in module list view",
+      "description": "As a user, I want to navigate the module list using keyboard shortcuts so I can browse efficiently.",
+      "acceptanceCriteria": [
+        "j or Down arrow moves selection down one row",
+        "k or Up arrow moves selection up one row",
+        "Navigation wraps: past last item wraps to first and vice versa",
+        "Enter transitions to detail view for the selected module",
+        "? opens the help overlay",
+        "q exits the application",
+        "c transitions to cleanup confirmation for selected items (if any)",
+        "All keybindings are responsive with no visible lag",
+        "Typecheck passes"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "Render module detail view",
+      "description": "As a user, I want to drill into a module and see its individual discovered items with sizes so I can make informed cleanup decisions.",
+      "acceptanceCriteria": [
+        "src/tui/views/module_detail.rs renders the detail view",
+        "Title bar shows module name, icon, and aggregate size",
+        "Each row displays: selection checkbox ([ ] or [x]), item name, item size",
+        "Items are sorted by size descending",
+        "Currently selected row is visually highlighted",
+        "Items still calculating size show 'calculating...'",
+        "Items with size calculation errors show 'N/A' with warning indicator",
+        "Status bar shows keybinding hints for detail view",
+        "Layout adapts to terminal width",
+        "Typecheck passes"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Keyboard navigation and selection in detail view",
+      "description": "As a user, I want to select specific items for cleanup using keyboard shortcuts so I can keep what I need and remove what I don't.",
+      "acceptanceCriteria": [
+        "j or Down moves selection down, k or Up moves selection up",
+        "Navigation wraps at list boundaries",
+        "Space toggles selection checkbox on highlighted item",
+        "a selects all items in current module, n deselects all",
+        "Enter or c transitions to cleanup confirmation (if items selected)",
+        "Backspace or Esc returns to module list view",
+        "? opens help overlay, q exits application",
+        "Selected items tracked in App.selected_items and persist across navigation",
+        "Typecheck passes"
+      ],
+      "priority": 14,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "Render cleanup confirmation view",
+      "description": "As a user, I want to preview what will be deleted before confirming so I don't accidentally remove important data.",
+      "acceptanceCriteria": [
+        "src/tui/views/cleanup_confirm.rs renders as a centered modal/dialog",
+        "Header reads 'Cleanup Preview'",
+        "Lists each selected item with path and size",
+        "Shows total count of items and total size to be reclaimed",
+        "Displays current mode prominently: 'DRY RUN (no files will be deleted)' or 'LIVE - files will be permanently deleted'",
+        "Shows action buttons: Confirm (y) and Cancel (n)",
+        "Long item lists scroll within the dialog",
+        "Layout centered, does not exceed 80% of terminal width/height",
+        "Typecheck passes"
+      ],
+      "priority": 15,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-016",
+      "title": "Keyboard actions in cleanup confirmation view",
+      "description": "As a user, I want to confirm or cancel the cleanup action with simple keypresses.",
+      "acceptanceCriteria": [
+        "y confirms the cleanup action",
+        "n or Esc cancels and returns to previous view",
+        "In dry-run mode: confirming displays summary of what would be deleted, then returns",
+        "In live mode: confirming triggers deletion via core engine, displays progress, shows results summary",
+        "q exits the application or cancels and returns",
+        "Typecheck passes"
+      ],
+      "priority": 16,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-017",
+      "title": "Render help overlay",
+      "description": "As a user, I want to see a keybinding reference by pressing ? so I can learn the available shortcuts.",
+      "acceptanceCriteria": [
+        "src/tui/views/help.rs renders as a centered overlay on top of the current view",
+        "Lists all keybindings organized by context: Global, Module List, Module Detail, Cleanup",
+        "Each entry shows the key(s) and their action (e.g. 'j/Down  Move down')",
+        "? or Esc closes the help overlay and returns to underlying view",
+        "Overlay is visually distinct with different background color or border style",
+        "Typecheck passes"
+      ],
+      "priority": 17,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-018",
+      "title": "Integrate async size calculation with TUI",
+      "description": "As a developer, I need the TUI to receive streaming size updates from the core scanner so that the UI refreshes as calculations complete.",
+      "acceptanceCriteria": [
+        "tokio::sync::mpsc channel created for size update messages",
+        "Core scanner sends (module_index, item_index, size) messages as each item's size is calculated",
+        "Event loop checks channel receiver on each tick and updates ModuleState items",
+        "Updated sizes reflected on next render cycle",
+        "Module rows in list view update aggregate size in real-time",
+        "When all calculations complete, scan_status transitions to Complete",
+        "UI remains responsive (no blocking) during size calculation",
+        "Typecheck passes"
+      ],
+      "priority": 18,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-019",
+      "title": "Display scan progress indicator",
+      "description": "As a user, I want to see that scanning is in progress so I know the application is working and not frozen.",
+      "acceptanceCriteria": [
+        "When scan_status is Scanning, progress indicator visible in title bar or status bar",
+        "Shows modules/items completed vs total (e.g. 'Scanning... 3/5 modules')",
+        "Indicator animates with spinner character cycling",
+        "When scan_status transitions to Complete, indicator replaced with final total size",
+        "Typecheck passes"
+      ],
+      "priority": 19,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-020",
+      "title": "Handle terminal resize gracefully",
+      "description": "As a user, I want the TUI to adapt when I resize my terminal window so that the layout doesn't break.",
+      "acceptanceCriteria": [
+        "Event::Resize triggers an immediate re-render",
+        "All views recalculate layout based on new terminal dimensions",
+        "Minimum supported width is 80 columns; if narrower, a message is shown",
+        "No panics or rendering artifacts on resize",
+        "Typecheck passes"
+      ],
+      "priority": 20,
+      "passes": true,
+      "notes": ""
+    }
+  ]
+}
