@@ -1,9 +1,0 @@
-name = "Xcode Derived Data"
-version = "1.0.0"
-description = "Xcode build artifacts and derived data. Safe to delete; Xcode regenerates on next build."
-author = "freespace"
-platforms = ["macos"]
-
-[[targets]]
-path = "~/Library/Developer/Xcode/DerivedData/*"
-description = "Xcode derived data directories for each project"

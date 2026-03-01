@@ -1,9 +1,0 @@
-name = "Homebrew Cache"
-version = "1.0.0"
-description = "Cached Homebrew downloads and bottles. Safe to delete; Homebrew re-downloads as needed."
-author = "freespace"
-platforms = ["macos"]
-
-[[targets]]
-path = "~/Library/Caches/Homebrew/*"
-description = "Homebrew cached downloads and bottle files"
