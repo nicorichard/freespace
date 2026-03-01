@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::config::AppConfig;
+use crate::module::manager;
 use crate::module::manifest::Module;
 use crate::tui::theme::Theme;
 use crate::tui::Tui;
@@ -31,10 +32,12 @@ pub struct App {
 }
 
 impl App {
-    /// Create a new App with default state.
+    /// Create a new App with default state and load built-in modules.
     pub fn new() -> Self {
+        let modules = Self::load_modules();
+
         Self {
-            modules: Vec::new(),
+            modules,
             current_view: View::ModuleList,
             selected_index: 0,
             selected_items: HashSet::new(),
@@ -43,6 +46,32 @@ impl App {
             theme: Theme::default(),
             should_quit: false,
         }
+    }
+
+    /// Discover and load built-in modules from the modules/ directory.
+    fn load_modules() -> Vec<ModuleState> {
+        let modules_dir = match manager::find_modules_dir() {
+            Some(dir) => dir,
+            None => return Vec::new(),
+        };
+
+        let (modules, warnings) = manager::load_builtin_modules(&modules_dir);
+
+        // Log warnings to stderr (they won't be visible in the TUI but are
+        // available if the user redirects stderr)
+        for warning in &warnings {
+            eprintln!("warning: {}", warning);
+        }
+
+        modules
+            .into_iter()
+            .map(|module| ModuleState {
+                module,
+                items: Vec::new(),
+                total_size: None,
+                status: ModuleStatus::Loading,
+            })
+            .collect()
     }
 
     /// Run the main event loop: poll input -> update state -> render.
