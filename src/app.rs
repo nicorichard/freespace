@@ -8,6 +8,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::config::AppConfig;
+use crate::core::cleaner;
 use crate::module::manager;
 use crate::module::manifest::Module;
 use crate::tui::theme::Theme;
@@ -26,6 +27,8 @@ pub struct App {
     pub scan_status: ScanStatus,
     pub config: AppConfig,
     pub theme: Theme,
+    /// View to return to when leaving an overlay (CleanupConfirm, Help).
+    pub previous_view: View,
     /// Whether the application should exit.
     pub should_quit: bool,
 }
@@ -43,6 +46,7 @@ impl App {
             scan_status: ScanStatus::Idle,
             config: AppConfig::default(),
             theme: Theme::default(),
+            previous_view: View::ModuleList,
             should_quit: false,
         }
     }
@@ -150,7 +154,9 @@ impl App {
             // Transition to cleanup confirmation if items are selected
             KeyCode::Char('c') => {
                 if !self.selected_items.is_empty() {
+                    self.previous_view = self.current_view;
                     self.current_view = View::CleanupConfirm;
+                    self.selected_index = 0;
                 }
             }
             _ => {}
@@ -211,7 +217,9 @@ impl App {
             // Transition to cleanup confirmation (if items selected)
             KeyCode::Enter | KeyCode::Char('c') => {
                 if !self.selected_items.is_empty() {
+                    self.previous_view = self.current_view;
                     self.current_view = View::CleanupConfirm;
+                    self.selected_index = 0;
                 }
             }
             // Return to module list view
@@ -227,8 +235,54 @@ impl App {
         }
     }
 
-    fn handle_key_cleanup_confirm(&mut self, _key: KeyCode) {
-        // Will be implemented in US-016
+    fn handle_key_cleanup_confirm(&mut self, key: KeyCode) {
+        match key {
+            // Confirm cleanup
+            KeyCode::Char('y') => {
+                if self.config.dry_run {
+                    // Dry-run mode: summary was already displayed, just return
+                    self.current_view = self.previous_view;
+                    self.selected_index = 0;
+                } else {
+                    // Live mode: perform actual deletion
+                    self.perform_cleanup();
+                    self.current_view = self.previous_view;
+                    self.selected_index = 0;
+                }
+            }
+            // Cancel and return to previous view
+            KeyCode::Char('n') | KeyCode::Esc => {
+                self.current_view = self.previous_view;
+                self.selected_index = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// Perform live cleanup: delete selected items and update module state.
+    fn perform_cleanup(&mut self) {
+        let paths: Vec<std::path::PathBuf> =
+            self.selected_items.iter().cloned().collect();
+
+        let result = cleaner::delete_items(&paths);
+
+        // Remove successfully deleted items from module state
+        let succeeded: HashSet<PathBuf> =
+            result.succeeded.into_iter().collect();
+
+        for ms in &mut self.modules {
+            ms.items.retain(|item| !succeeded.contains(&item.path));
+            // Recalculate total size from remaining items
+            let total: u64 = ms.items.iter().filter_map(|i| i.size).sum();
+            ms.total_size = if ms.items.is_empty() {
+                Some(0)
+            } else {
+                Some(total)
+            };
+        }
+
+        // Clear selected items
+        self.selected_items.clear();
     }
 
     fn handle_key_help(&mut self, _key: KeyCode) {
@@ -274,6 +328,7 @@ impl App {
 }
 
 /// Which view is currently displayed.
+#[derive(Clone, Copy)]
 pub enum View {
     ModuleList,
     ModuleDetail(usize),
