@@ -5,14 +5,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::config::AppConfig;
 use crate::module::manager;
 use crate::module::manifest::Module;
 use crate::tui::theme::Theme;
+use crate::tui::views;
 use crate::tui::Tui;
 
 /// Tick rate for the event loop poll interval.
@@ -146,50 +145,7 @@ impl App {
     // Placeholder render functions — will be replaced by full view implementations.
 
     fn render_module_list(&self, frame: &mut ratatui::Frame) {
-        let area = frame.area();
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Min(1),
-                Constraint::Length(1),
-            ])
-            .split(area);
-
-        // Title bar
-        let title = Paragraph::new(Line::from(vec![
-            Span::styled(" Freespace ", self.theme.style_header()),
-        ]))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(self.theme.style_border()),
-        );
-        frame.render_widget(title, chunks[0]);
-
-        // Main content — placeholder
-        let content = if self.modules.is_empty() {
-            Paragraph::new("No modules loaded. Press q to quit.")
-                .style(self.theme.style_normal())
-        } else {
-            Paragraph::new("Module list will be rendered here.")
-                .style(self.theme.style_normal())
-        };
-        let content_block = content.block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(self.theme.style_border()),
-        );
-        frame.render_widget(content_block, chunks[1]);
-
-        // Status bar
-        let status = Paragraph::new(Line::from(vec![
-            Span::styled(
-                " ↑/↓ navigate  Enter details  c clean  ? help  q quit ",
-                self.theme.style_normal(),
-            ),
-        ]));
-        frame.render_widget(status, chunks[2]);
+        views::module_list::render(self, frame);
     }
 
     fn render_module_detail(&self, frame: &mut ratatui::Frame, _module_idx: usize) {
