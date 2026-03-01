@@ -307,16 +307,9 @@ impl App {
         match key {
             // Confirm cleanup
             KeyCode::Char('y') => {
-                if self.config.dry_run {
-                    // Dry-run mode: summary was already displayed, just return
-                    self.current_view = self.previous_view;
-                    self.selected_index = 0;
-                } else {
-                    // Live mode: perform actual deletion
-                    self.perform_cleanup();
-                    self.current_view = self.previous_view;
-                    self.selected_index = 0;
-                }
+                self.perform_cleanup();
+                self.current_view = self.previous_view;
+                self.selected_index = 0;
             }
             // Cancel and return to previous view
             KeyCode::Char('n') | KeyCode::Esc => {
