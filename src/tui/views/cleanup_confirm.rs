@@ -67,12 +67,11 @@ pub fn render(app: &App, frame: &mut Frame) {
     let total_size: u64 = items.iter().filter_map(|i| i.2).sum();
     let known_count = items.iter().filter(|i| i.2.is_some()).count();
 
-    // Layout inside the dialog: header, mode banner, items list, summary, action bar
+    // Layout inside the dialog: header, items list, summary, action bar
     let inner_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Header with border
-            Constraint::Length(3), // Mode banner
             Constraint::Min(3),   // Items table (scrollable)
             Constraint::Length(2), // Summary line
             Constraint::Length(1), // Action bar
@@ -80,10 +79,9 @@ pub fn render(app: &App, frame: &mut Frame) {
         .split(dialog_area);
 
     render_header(app, frame, inner_chunks[0]);
-    render_mode_banner(app, frame, inner_chunks[1]);
-    render_items_list(app, frame, inner_chunks[2], &items);
-    render_summary(app, frame, inner_chunks[3], item_count, total_size, known_count);
-    render_action_bar(app, frame, inner_chunks[4]);
+    render_items_list(app, frame, inner_chunks[1], &items);
+    render_summary(app, frame, inner_chunks[2], item_count, total_size, known_count);
+    render_action_bar(app, frame, inner_chunks[3]);
 }
 
 fn render_header(app: &App, frame: &mut Frame, area: Rect) {
@@ -99,31 +97,6 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(header, area);
 }
 
-fn render_mode_banner(app: &App, frame: &mut Frame, area: Rect) {
-    let (text, style) = if app.config.dry_run {
-        (
-            " \u{1f6e1}  DRY RUN \u{2014} no files will be deleted",
-            Style::default()
-                .fg(app.theme.status_loading)
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        (
-            " \u{26a0}  LIVE \u{2014} files will be permanently deleted",
-            Style::default()
-                .fg(app.theme.error_fg)
-                .add_modifier(Modifier::BOLD),
-        )
-    };
-
-    let banner = Paragraph::new(Line::from(vec![Span::styled(text, style)]))
-        .block(
-            Block::default()
-                .borders(Borders::LEFT | Borders::RIGHT)
-                .border_style(app.theme.style_border()),
-        );
-    frame.render_widget(banner, area);
-}
 
 fn render_items_list(
     app: &App,
