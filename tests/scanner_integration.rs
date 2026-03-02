@@ -63,7 +63,8 @@ async fn scan_global_target() {
                 match msg {
                     Some(ScanMessage::ItemDiscovered { module_index, item }) => {
                         assert_eq!(module_index, 0);
-                        assert_eq!(item.size, Some(2048));
+                        // Disk usage may be >= written bytes due to block alignment
+                        assert!(item.size.unwrap() >= 2048);
                         items_found += 1;
                     }
                     Some(ScanMessage::ModuleComplete { .. }) => {
