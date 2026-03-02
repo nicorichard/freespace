@@ -47,16 +47,33 @@ pub(crate) fn expand_target_path(pattern: &str) -> Vec<PathBuf> {
     }
 }
 
+/// Return the actual disk usage of a file from its metadata.
+/// On Unix, this uses block count to handle sparse files correctly (like `du`).
+/// On other platforms, falls back to the logical file length.
+#[cfg(unix)]
+fn file_disk_size(metadata: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    metadata.blocks() * 512
+}
+
+#[cfg(not(unix))]
+fn file_disk_size(metadata: &std::fs::Metadata) -> u64 {
+    metadata.len()
+}
+
 /// Calculate the size of a file or directory.
+/// Uses actual disk usage (not apparent size) to correctly handle sparse files.
 pub fn calculate_size(path: &Path) -> u64 {
     if path.is_file() {
-        std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+        std::fs::metadata(path)
+            .map(|m| file_disk_size(&m))
+            .unwrap_or(0)
     } else if path.is_dir() {
         walkdir::WalkDir::new(path)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
-            .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
+            .map(|e| e.metadata().map(|m| file_disk_size(&m)).unwrap_or(0))
             .sum()
     } else {
         0
@@ -214,7 +231,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let file = tmp.path().join("data.bin");
         fs::write(&file, vec![0u8; 1024]).unwrap();
-        assert_eq!(calculate_size(&file), 1024);
+        // Disk usage may be >= written bytes due to block alignment
+        assert!(calculate_size(&file) >= 1024);
     }
 
     #[test]
@@ -225,7 +243,8 @@ mod tests {
         fs::write(sub.join("a.txt"), vec![0u8; 100]).unwrap();
         fs::write(sub.join("b.txt"), vec![0u8; 200]).unwrap();
         fs::write(tmp.path().join("root.txt"), vec![0u8; 50]).unwrap();
-        assert_eq!(calculate_size(tmp.path()), 350);
+        // Disk usage may be >= written bytes due to block alignment
+        assert!(calculate_size(tmp.path()) >= 350);
     }
 
     #[test]
@@ -385,7 +404,8 @@ mod tests {
                         Some(ScanMessage::ItemDiscovered { module_index, item }) => {
                             assert_eq!(module_index, 0);
                             assert_eq!(item.name, "cache");
-                            assert_eq!(item.size, Some(512));
+                            // Disk usage may be >= written bytes due to block alignment
+                            assert!(item.size.unwrap() >= 512);
                             got_item = true;
                         }
                         Some(ScanMessage::ModuleComplete { module_index }) => {
