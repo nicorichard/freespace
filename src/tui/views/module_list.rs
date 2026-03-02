@@ -89,13 +89,15 @@ pub fn render(app: &App, frame: &mut Frame) {
         .constraints([
             Constraint::Length(3), // Title bar
             Constraint::Min(1),    // Content
+            Constraint::Length(2), // Description pane
             Constraint::Length(1), // Status bar
         ])
         .split(area);
 
     render_title_bar(app, frame, chunks[0]);
     render_module_table(app, frame, chunks[1]);
-    render_status_bar(app, frame, chunks[2]);
+    render_description_pane(app, frame, chunks[2]);
+    render_status_bar(app, frame, chunks[3]);
 }
 
 /// Spinner characters that cycle during scanning.
@@ -346,6 +348,18 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
 #[cfg(test)]
 pub fn all_sorted_module_indices_for_test(app: &App) -> Vec<usize> {
     all_sorted_module_indices(app)
+}
+
+fn render_description_pane(app: &App, frame: &mut Frame, area: Rect) {
+    let description = sorted_module_indices(app)
+        .get(app.selected_index)
+        .map(|&idx| app.modules[idx].module.description.as_str())
+        .unwrap_or("");
+    let line = Line::from(Span::styled(
+        format!(" {}", description),
+        app.theme.style_description(),
+    ));
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {

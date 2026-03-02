@@ -47,13 +47,15 @@ pub fn render(app: &App, frame: &mut Frame, module_idx: usize) {
         return;
     }
 
+    let title_height = if app.drill_stack.is_empty() { 4 } else { 3 };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Title bar
-            Constraint::Min(1),    // Content
-            Constraint::Length(1), // Path bar
-            Constraint::Length(1), // Status bar
+            Constraint::Length(title_height), // Title bar (taller at root for description)
+            Constraint::Min(1),               // Content
+            Constraint::Length(1),            // Path bar
+            Constraint::Length(1),            // Status bar
         ])
         .split(area);
 
@@ -88,11 +90,22 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize)
         format!(" {} {} ", icon, parts.join(" > "))
     };
 
-    let title = Paragraph::new(Line::from(vec![Span::styled(
-        title_text,
-        app.theme.style_header(),
-    )]))
-    .block(
+    let lines = if app.drill_stack.is_empty() {
+        vec![
+            Line::from(vec![Span::styled(title_text, app.theme.style_header())]),
+            Line::from(vec![Span::styled(
+                format!(" {}", ms.module.description),
+                app.theme.style_description(),
+            )]),
+        ]
+    } else {
+        vec![Line::from(vec![Span::styled(
+            title_text,
+            app.theme.style_header(),
+        )])]
+    };
+
+    let title = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(app.theme.style_border()),
