@@ -194,16 +194,28 @@ impl App {
                     if let Some(ms) = self.modules.get_mut(module_index) {
                         ms.status = ModuleStatus::Discovering;
                         ms.items.push(item);
-                        // Recalculate total size from all items with known sizes
-                        let total: u64 = ms.items.iter().filter_map(|i| i.size).sum();
-                        ms.total_size = Some(total);
+                    }
+                }
+                ScanMessage::ItemSized {
+                    module_index,
+                    item_index,
+                    size,
+                } => {
+                    if let Some(ms) = self.modules.get_mut(module_index) {
+                        if let Some(item) = ms.items.get_mut(item_index) {
+                            item.size = Some(size);
+                        }
+                        // Incrementally update total_size
+                        ms.total_size = Some(ms.total_size.unwrap_or(0) + size);
                     }
                 }
                 ScanMessage::ModuleComplete { module_index } => {
                     if let Some(ms) = self.modules.get_mut(module_index) {
                         ms.status = ModuleStatus::Ready;
-                        let total: u64 = ms.items.iter().filter_map(|i| i.size).sum();
-                        ms.total_size = Some(total);
+                        // Ensure total_size is set even if no items were sized
+                        if ms.total_size.is_none() {
+                            ms.total_size = Some(0);
+                        }
                     }
                 }
                 ScanMessage::ModuleError {

@@ -16,6 +16,12 @@ pub enum ScanMessage {
     /// An error occurred while scanning a module.
     #[allow(dead_code)]
     ModuleError { module_index: usize, error: String },
+    /// An item's size has been calculated (async sizing phase).
+    ItemSized {
+        module_index: usize,
+        item_index: usize,
+        size: u64,
+    },
     /// A drill-in item's size has been calculated.
     DrillItemSized {
         drill_depth: usize,
@@ -133,83 +139,126 @@ pub(crate) fn local_item_name(path: &Path, dir_name: &str) -> String {
         .unwrap_or_else(|| dir_name.to_string())
 }
 
-/// Spawn a background task that scans all modules and sends results via the channel.
+/// Scan a single module: discover items (sent with size: None), then calculate
+/// sizes and send `ItemSized` messages. Finally sends `ModuleComplete`.
+fn scan_module(
+    module_index: usize,
+    module: &Module,
+    search_dirs: &[PathBuf],
+    tx: &mpsc::UnboundedSender<ScanMessage>,
+) {
+    // Phase 1: Discover all items (fast — no size calculation)
+    let mut item_index = 0usize;
+    let mut paths_to_size: Vec<(usize, PathBuf)> = Vec::new();
+
+    for target in &module.targets {
+        if let Some(ref path_pattern) = target.path {
+            let paths = expand_target_path(path_pattern);
+            for path in paths {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.display().to_string());
+
+                let item_type = if path.is_dir() {
+                    ItemType::Directory
+                } else {
+                    ItemType::File
+                };
+
+                let item = Item {
+                    name,
+                    path: path.clone(),
+                    size: None,
+                    item_type,
+                    target_description: target.description.clone(),
+                };
+
+                if tx
+                    .send(ScanMessage::ItemDiscovered { module_index, item })
+                    .is_err()
+                {
+                    return;
+                }
+
+                paths_to_size.push((item_index, path));
+                item_index += 1;
+            }
+        } else if let Some(ref dir_name) = target.name {
+            let paths = discover_local_dirs(dir_name, search_dirs, target.indicator.as_deref());
+            for path in paths {
+                let name = local_item_name(&path, dir_name);
+
+                let item = Item {
+                    name,
+                    path: path.clone(),
+                    size: None,
+                    item_type: ItemType::Directory,
+                    target_description: target.description.clone(),
+                };
+
+                if tx
+                    .send(ScanMessage::ItemDiscovered { module_index, item })
+                    .is_err()
+                {
+                    return;
+                }
+
+                paths_to_size.push((item_index, path));
+                item_index += 1;
+            }
+        }
+    }
+
+    // Phase 2: Calculate sizes and send ItemSized messages
+    for (idx, path) in paths_to_size {
+        let size = calculate_size(&path);
+        if tx
+            .send(ScanMessage::ItemSized {
+                module_index,
+                item_index: idx,
+                size,
+            })
+            .is_err()
+        {
+            return;
+        }
+    }
+
+    let _ = tx.send(ScanMessage::ModuleComplete { module_index });
+}
+
+/// Spawn background tasks that scan all modules in parallel and send results via the channel.
 pub fn start_scan(
     modules: Vec<Module>,
     tx: mpsc::UnboundedSender<ScanMessage>,
     search_dirs: Vec<PathBuf>,
 ) {
-    tokio::task::spawn_blocking(move || {
-        for (module_index, module) in modules.iter().enumerate() {
-            for target in &module.targets {
-                if let Some(ref path_pattern) = target.path {
-                    // Global target: expand path pattern
-                    let paths = expand_target_path(path_pattern);
+    let search_dirs = std::sync::Arc::new(search_dirs);
+    let module_count = modules.len();
+    let (done_tx, mut done_rx) = mpsc::unbounded_channel::<()>();
 
-                    for path in paths {
-                        let name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| path.display().to_string());
+    // Spawn one blocking task per module
+    for (module_index, module) in modules.into_iter().enumerate() {
+        let tx = tx.clone();
+        let search_dirs = std::sync::Arc::clone(&search_dirs);
+        let done_tx = done_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            scan_module(module_index, &module, &search_dirs, &tx);
+            let _ = done_tx.send(());
+        });
+    }
 
-                        let item_type = if path.is_dir() {
-                            ItemType::Directory
-                        } else {
-                            ItemType::File
-                        };
-
-                        let size = calculate_size(&path);
-
-                        let item = Item {
-                            name,
-                            path,
-                            size: Some(size),
-                            item_type,
-                            target_description: target.description.clone(),
-                        };
-
-                        if tx
-                            .send(ScanMessage::ItemDiscovered { module_index, item })
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                } else if let Some(ref dir_name) = target.name {
-                    // Local target: discover directories by name
-                    let paths =
-                        discover_local_dirs(dir_name, &search_dirs, target.indicator.as_deref());
-
-                    for path in paths {
-                        let name = local_item_name(&path, dir_name);
-                        let size = calculate_size(&path);
-
-                        let item = Item {
-                            name,
-                            path,
-                            size: Some(size),
-                            item_type: ItemType::Directory,
-                            target_description: target.description.clone(),
-                        };
-
-                        if tx
-                            .send(ScanMessage::ItemDiscovered { module_index, item })
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                }
-            }
-
-            if tx
-                .send(ScanMessage::ModuleComplete { module_index })
-                .is_err()
-            {
-                return;
+    // Spawn a task that waits for all module scans to finish, then sends ScanComplete
+    drop(done_tx); // Drop our copy so the channel closes when all tasks finish
+    tokio::spawn(async move {
+        let mut completed = 0;
+        while done_rx.recv().await.is_some() {
+            completed += 1;
+            if completed == module_count {
+                break;
             }
         }
-
         let _ = tx.send(ScanMessage::ScanComplete);
     });
 }
@@ -392,6 +441,7 @@ mod tests {
         start_scan(vec![module], tx, vec![]);
 
         let mut got_item = false;
+        let mut got_sized = false;
         let mut got_complete = false;
         let mut got_scan_complete = false;
 
@@ -406,9 +456,16 @@ mod tests {
                         Some(ScanMessage::ItemDiscovered { module_index, item }) => {
                             assert_eq!(module_index, 0);
                             assert_eq!(item.name, "cache");
-                            // Disk usage may be >= written bytes due to block alignment
-                            assert!(item.size.unwrap() >= 512);
+                            // Discovery phase: size is None
+                            assert!(item.size.is_none());
                             got_item = true;
+                        }
+                        Some(ScanMessage::ItemSized { module_index, item_index, size }) => {
+                            assert_eq!(module_index, 0);
+                            assert_eq!(item_index, 0);
+                            // Disk usage may be >= written bytes due to block alignment
+                            assert!(size >= 512);
+                            got_sized = true;
                         }
                         Some(ScanMessage::ModuleComplete { module_index }) => {
                             assert_eq!(module_index, 0);
@@ -429,6 +486,7 @@ mod tests {
         }
 
         assert!(got_item, "expected ItemDiscovered");
+        assert!(got_sized, "expected ItemSized");
         assert!(got_complete, "expected ModuleComplete");
         assert!(got_scan_complete, "expected ScanComplete");
     }

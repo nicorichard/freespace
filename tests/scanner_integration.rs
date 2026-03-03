@@ -52,6 +52,7 @@ async fn scan_global_target() {
     scanner::start_scan(vec![module], tx, vec![]);
 
     let mut items_found = 0;
+    let mut sized_count = 0;
     let mut got_complete = false;
 
     let timeout = tokio::time::sleep(std::time::Duration::from_secs(5));
@@ -63,9 +64,15 @@ async fn scan_global_target() {
                 match msg {
                     Some(ScanMessage::ItemDiscovered { module_index, item }) => {
                         assert_eq!(module_index, 0);
-                        // Disk usage may be >= written bytes due to block alignment
-                        assert!(item.size.unwrap() >= 2048);
+                        // Discovery phase: size is None
+                        assert!(item.size.is_none());
                         items_found += 1;
+                    }
+                    Some(ScanMessage::ItemSized { module_index, size, .. }) => {
+                        assert_eq!(module_index, 0);
+                        // Disk usage may be >= written bytes due to block alignment
+                        assert!(size >= 2048);
+                        sized_count += 1;
                     }
                     Some(ScanMessage::ModuleComplete { .. }) => {
                         got_complete = true;
@@ -80,6 +87,7 @@ async fn scan_global_target() {
     }
 
     assert_eq!(items_found, 1);
+    assert_eq!(sized_count, 1);
     assert!(got_complete);
 }
 

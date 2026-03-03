@@ -172,31 +172,6 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
         return;
     }
 
-    // Show loading indicator during scan instead of a partially-sorted table
-    if matches!(app.scan_status, ScanStatus::Scanning) {
-        let total_modules = app.modules.len();
-        let completed_modules = app
-            .modules
-            .iter()
-            .filter(|m| matches!(m.status, ModuleStatus::Ready | ModuleStatus::Error(_)))
-            .count();
-        let spinner = SPINNER_CHARS[app.tick_count % SPINNER_CHARS.len()];
-        let loading_text = format!(
-            "{} Scanning... {}/{} modules",
-            spinner, completed_modules, total_modules
-        );
-        let content = Paragraph::new(loading_text)
-            .style(app.theme.style_status_loading())
-            .alignment(ratatui::layout::Alignment::Center)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(app.theme.style_border()),
-            );
-        frame.render_widget(content, area);
-        return;
-    }
-
     let all_sorted = all_sorted_module_indices(app);
     let navigable = sorted_module_indices(app);
 
