@@ -44,6 +44,10 @@ pub struct App {
     scan_tx: mpsc::UnboundedSender<ScanMessage>,
     /// Counter incremented each event loop tick, used for spinner animation.
     pub tick_count: usize,
+    /// Whether the info overlay is showing a remove confirmation prompt.
+    pub info_confirm_remove: bool,
+    /// Deferred editor launch: set to a path to open in $EDITOR after key handling.
+    pub pending_editor: Option<PathBuf>,
     /// Stack of drill-in levels for directory exploration.
     pub drill_stack: Vec<DrillLevel>,
     /// Saved selected_index for the module list so we can restore it on back navigation.
@@ -91,6 +95,8 @@ impl App {
             scan_rx: rx,
             scan_tx: tx,
             tick_count: 0,
+            info_confirm_remove: false,
+            pending_editor: None,
             drill_stack: Vec::new(),
             module_list_index: 0,
             disk_total,
@@ -151,11 +157,12 @@ impl App {
 
         let module_states = modules
             .into_iter()
-            .map(|module| ModuleState {
+            .map(|(module, manifest_path)| ModuleState {
                 module,
                 items: Vec::new(),
                 total_size: None,
                 status: ModuleStatus::Loading,
+                manifest_path: Some(manifest_path),
             })
             .collect();
 
@@ -182,6 +189,14 @@ impl App {
                     }
                     _ => {}
                 }
+            }
+
+            // Deferred editor launch (must happen outside key handler)
+            if let Some(path) = self.pending_editor.take() {
+                crate::tui::restore()?;
+                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+                let _ = Command::new(&editor).arg(&path).status();
+                *terminal = crate::tui::init()?;
             }
 
             // Process any pending scan messages (non-blocking)
@@ -374,6 +389,10 @@ impl App {
             View::ModuleDetail(_) => self.handle_key_module_detail(key),
             View::CleanupConfirm => self.handle_key_cleanup_confirm(key),
             View::Help => self.handle_key_help(key),
+            View::Info(idx) => {
+                let idx = *idx;
+                self.handle_key_info(key, idx);
+            }
         }
     }
 
@@ -538,6 +557,13 @@ impl App {
                 self.filter_cursor = 0;
                 self.selected_index = 0;
             }
+            // Open info overlay for the selected module
+            KeyCode::Char('i') => {
+                if let Some(&module_idx) = sorted.get(self.selected_index) {
+                    self.previous_view = self.current_view;
+                    self.current_view = View::Info(module_idx);
+                }
+            }
             // Esc: clear filter
             KeyCode::Esc => {
                 if !self.filter_query.is_empty() {
@@ -646,6 +672,11 @@ impl App {
                     let items = self.current_detail_items(module_idx);
                     Self::open_in_file_manager(&items[item_idx].path);
                 }
+            }
+            // Open info overlay for this module
+            KeyCode::Char('i') => {
+                self.previous_view = self.current_view;
+                self.current_view = View::Info(module_idx);
             }
             // Enter filter mode
             KeyCode::Char('/') => {
@@ -798,6 +829,53 @@ impl App {
         }
     }
 
+    fn handle_key_info(&mut self, key: KeyCode, module_idx: usize) {
+        if self.info_confirm_remove {
+            match key {
+                KeyCode::Char('y') => {
+                    // Remove the module directory and state
+                    if let Some(manifest_path) = &self.modules[module_idx].manifest_path {
+                        if let Some(module_dir) = manifest_path.parent() {
+                            let _ = std::fs::remove_dir_all(module_dir);
+                        }
+                    }
+                    self.modules.remove(module_idx);
+                    self.info_confirm_remove = false;
+                    self.current_view = View::ModuleList;
+                    self.selected_index = 0;
+                }
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    self.info_confirm_remove = false;
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match key {
+            KeyCode::Esc | KeyCode::Char('i') => {
+                self.current_view = self.previous_view;
+                self.selected_index = 0;
+            }
+            KeyCode::Char('e') => {
+                if let Some(manifest_path) = &self.modules[module_idx].manifest_path {
+                    self.pending_editor = Some(manifest_path.clone());
+                }
+            }
+            KeyCode::Char('o') => {
+                if let Some(manifest_path) = &self.modules[module_idx].manifest_path {
+                    if let Some(module_dir) = manifest_path.parent() {
+                        Self::open_in_file_manager(module_dir);
+                    }
+                }
+            }
+            KeyCode::Char('r') => {
+                self.info_confirm_remove = true;
+            }
+            _ => {}
+        }
+    }
+
     /// Minimum terminal width required for rendering views.
     const MIN_WIDTH: u16 = 80;
 
@@ -822,6 +900,7 @@ impl App {
             View::ModuleDetail(idx) => self.render_module_detail(frame, *idx),
             View::CleanupConfirm => self.render_cleanup_confirm(frame),
             View::Help => self.render_help(frame),
+            View::Info(idx) => self.render_info(frame, *idx),
         }
     }
 
@@ -843,6 +922,10 @@ impl App {
         views::help::render(self, frame);
     }
 
+    fn render_info(&self, frame: &mut ratatui::Frame, module_idx: usize) {
+        views::info::render(self, frame, module_idx);
+    }
+
     /// Build an App with controlled state for testing (no scanning, no config).
     #[cfg(test)]
     pub fn new_for_test(modules: Vec<ModuleState>) -> Self {
@@ -862,6 +945,8 @@ impl App {
             scan_rx: rx,
             scan_tx: tx,
             tick_count: 0,
+            info_confirm_remove: false,
+            pending_editor: None,
             drill_stack: Vec::new(),
             module_list_index: 0,
             disk_total: None,
@@ -897,6 +982,7 @@ pub enum View {
     ModuleDetail(usize),
     CleanupConfirm,
     Help,
+    Info(usize),
 }
 
 /// State for a single loaded module including its discovered items.
@@ -905,6 +991,8 @@ pub struct ModuleState {
     pub items: Vec<Item>,
     pub total_size: Option<u64>,
     pub status: ModuleStatus,
+    /// Filesystem path to the module's manifest (module.toml).
+    pub manifest_path: Option<PathBuf>,
 }
 
 /// Loading/discovery status of a module.
@@ -987,6 +1075,7 @@ mod tests {
             items,
             total_size: Some(0), // recalculated by sort
             status: ModuleStatus::Ready,
+            manifest_path: None,
         }
     }
 

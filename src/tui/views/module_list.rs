@@ -377,6 +377,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
                 ("space", "select"),
                 ("a", "all"),
                 ("n", "none"),
+                ("i", "info"),
                 ("/", "filter"),
                 ("c", "clean"),
                 ("?", "help"),
@@ -419,6 +420,7 @@ mod tests {
             }],
             total_size: Some(size),
             status: ModuleStatus::Ready,
+            manifest_path: None,
         }
     }
 
@@ -440,6 +442,7 @@ mod tests {
             items: vec![],
             total_size: Some(0),
             status: ModuleStatus::Ready,
+            manifest_path: None,
         };
         let app = App::new_for_test(vec![m]);
         let sorted = sorted_module_indices(&app);

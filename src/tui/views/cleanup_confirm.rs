@@ -322,6 +322,7 @@ mod tests {
             ],
             total_size: Some(5_000_001_000),
             status: ModuleStatus::Ready,
+            manifest_path: None,
         };
         let mut app = App::new_for_test(vec![ms]);
         // Select both items

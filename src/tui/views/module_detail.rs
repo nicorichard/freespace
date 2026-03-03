@@ -288,6 +288,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize
                 ("a", "all"),
                 ("n", "none"),
                 ("o", "open"),
+                ("i", "info"),
                 ("/", "filter"),
                 ("c", "clean"),
                 ("esc", "back"),
@@ -340,6 +341,7 @@ mod tests {
             ],
             total_size: Some(5_000_001_000),
             status: ModuleStatus::Ready,
+            manifest_path: None,
         };
         let mut app = App::new_for_test(vec![ms]);
         app.current_view = crate::app::View::ModuleDetail(0);
@@ -388,6 +390,7 @@ mod tests {
             items: vec![],
             total_size: Some(0),
             status: ModuleStatus::Ready,
+            manifest_path: None,
         };
         let mut app = App::new_for_test(vec![ms]);
         app.current_view = crate::app::View::ModuleDetail(0);
