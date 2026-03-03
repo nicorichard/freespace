@@ -54,6 +54,7 @@ pub fn render(app: &App, frame: &mut Frame, module_idx: usize) {
         .constraints([
             Constraint::Length(title_height), // Title bar (taller at root for description)
             Constraint::Min(1),               // Content
+            Constraint::Length(1),            // Description pane
             Constraint::Length(1),            // Path bar
             Constraint::Length(1),            // Status bar
         ])
@@ -61,8 +62,9 @@ pub fn render(app: &App, frame: &mut Frame, module_idx: usize) {
 
     render_title_bar(app, frame, chunks[0], module_idx);
     render_items_table(app, frame, chunks[1], module_idx);
-    render_path_bar(app, frame, chunks[2], module_idx);
-    render_status_bar(app, frame, chunks[3], module_idx);
+    render_description_pane(app, frame, chunks[2], module_idx);
+    render_path_bar(app, frame, chunks[3], module_idx);
+    render_status_bar(app, frame, chunks[4], module_idx);
 }
 
 fn render_title_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
@@ -227,6 +229,23 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
     frame.render_stateful_widget(table, area, &mut state);
 }
 
+fn render_description_pane(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
+    let sorted = sorted_item_indices(app, module_idx);
+    let items = app.current_detail_items(module_idx);
+
+    let description = sorted
+        .get(app.selected_index)
+        .and_then(|&idx| items.get(idx))
+        .and_then(|item| item.target_description.as_deref())
+        .unwrap_or("");
+
+    let line = Line::from(Span::styled(
+        format!(" {}", description),
+        app.theme.style_description(),
+    ));
+    frame.render_widget(Paragraph::new(line), area);
+}
+
 fn render_path_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
     let sorted = sorted_item_indices(app, module_idx);
     let items = app.current_detail_items(module_idx);
@@ -309,12 +328,14 @@ mod tests {
                     path: PathBuf::from("/tmp/large-dir"),
                     size: Some(5_000_000_000),
                     item_type: ItemType::Directory,
+                    target_description: None,
                 },
                 Item {
                     name: "small-file".to_string(),
                     path: PathBuf::from("/tmp/small-file"),
                     size: Some(1_000),
                     item_type: ItemType::File,
+                    target_description: None,
                 },
             ],
             total_size: Some(5_000_001_000),

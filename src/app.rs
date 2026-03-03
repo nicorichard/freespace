@@ -263,6 +263,7 @@ impl App {
                     path: entry_path,
                     size: None,
                     item_type,
+                    target_description: None,
                 });
             }
         }
@@ -848,6 +849,7 @@ pub struct Item {
     pub path: PathBuf,
     pub size: Option<u64>,
     pub item_type: ItemType,
+    pub target_description: Option<String>,
 }
 
 /// The type of a discovered filesystem item.
@@ -898,6 +900,7 @@ mod tests {
                 path: PathBuf::from(format!("/tmp/test/{}", name)),
                 size: Some(size),
                 item_type: ItemType::Directory,
+                target_description: None,
             })
             .collect();
         ModuleState {
