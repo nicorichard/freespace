@@ -354,17 +354,7 @@ impl App {
         }
 
         // Normalize Emacs/terminal-style Ctrl keybindings to standard keys
-        let key = if modifiers.contains(KeyModifiers::CONTROL) {
-            match key {
-                KeyCode::Char('n') => KeyCode::Down,
-                KeyCode::Char('p') => KeyCode::Up,
-                KeyCode::Char('f') => KeyCode::Right,
-                KeyCode::Char('b') => KeyCode::Left,
-                _ => key,
-            }
-        } else {
-            key
-        };
+        let key = crate::tui::widgets::normalize_emacs_key(key, modifiers);
 
         // If filter input is active, let navigation keys pass through
         // to the view handler (like fzf), handle everything else as filter input
