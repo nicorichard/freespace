@@ -196,16 +196,7 @@ fn cmd_inspect(modules_dir: &std::path::Path, name: &str) -> anyhow::Result<()> 
     println!("Targets:");
     for target in &module.targets {
         let desc = target.description.as_deref().unwrap_or("(no description)");
-        if let Some(ref path) = target.path {
-            println!("  {} - {}", path, desc);
-        } else if let Some(ref name) = target.name {
-            let indicator = target
-                .indicator
-                .as_ref()
-                .map(|i| format!(" (indicator: {})", i))
-                .unwrap_or_default();
-            println!("  [local] {}{} - {}", name, indicator, desc);
-        }
+        println!("  {} - {}", target.path, desc);
     }
 
     if let Some(source) = module::installer::read_source_info(&module_dir) {

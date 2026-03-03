@@ -87,12 +87,7 @@ pub fn calculate_size(path: &Path) -> u64 {
 }
 
 /// Discover local directories matching `dir_name` under the given search roots.
-/// If `indicator` is set, only matches where the parent contains the indicator file.
-pub(crate) fn discover_local_dirs(
-    dir_name: &str,
-    search_roots: &[PathBuf],
-    indicator: Option<&str>,
-) -> Vec<PathBuf> {
+pub(crate) fn discover_local_dirs(dir_name: &str, search_roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut results = Vec::new();
     for root in search_roots {
         let mut it = walkdir::WalkDir::new(root).follow_links(false).into_iter();
@@ -111,17 +106,6 @@ pub(crate) fn discover_local_dirs(
                 continue;
             }
             if name == dir_name {
-                if let Some(ind) = indicator {
-                    if !entry
-                        .path()
-                        .parent()
-                        .map(|p| p.join(ind).exists())
-                        .unwrap_or(false)
-                    {
-                        it.skip_current_dir();
-                        continue;
-                    }
-                }
                 results.push(entry.into_path());
                 it.skip_current_dir(); // don't recurse into matched dir
             }
@@ -152,8 +136,33 @@ fn scan_module(
     let mut paths_to_size: Vec<(usize, PathBuf)> = Vec::new();
 
     for target in &module.targets {
-        if let Some(ref path_pattern) = target.path {
-            let paths = expand_target_path(path_pattern);
+        if let Some(dir_name) = target.path.strip_prefix("**/") {
+            // Local target: recursive search for dir_name under search_dirs
+            let paths = discover_local_dirs(dir_name, search_dirs);
+            for path in paths {
+                let name = local_item_name(&path, dir_name);
+
+                let item = Item {
+                    name,
+                    path: path.clone(),
+                    size: None,
+                    item_type: ItemType::Directory,
+                    target_description: target.description.clone(),
+                };
+
+                if tx
+                    .send(ScanMessage::ItemDiscovered { module_index, item })
+                    .is_err()
+                {
+                    return;
+                }
+
+                paths_to_size.push((item_index, path));
+                item_index += 1;
+            }
+        } else {
+            // Global target: expand path pattern
+            let paths = expand_target_path(&target.path);
             for path in paths {
                 let name = path
                     .file_name()
@@ -171,29 +180,6 @@ fn scan_module(
                     path: path.clone(),
                     size: None,
                     item_type,
-                    target_description: target.description.clone(),
-                };
-
-                if tx
-                    .send(ScanMessage::ItemDiscovered { module_index, item })
-                    .is_err()
-                {
-                    return;
-                }
-
-                paths_to_size.push((item_index, path));
-                item_index += 1;
-            }
-        } else if let Some(ref dir_name) = target.name {
-            let paths = discover_local_dirs(dir_name, search_dirs, target.indicator.as_deref());
-            for path in paths {
-                let name = local_item_name(&path, dir_name);
-
-                let item = Item {
-                    name,
-                    path: path.clone(),
-                    size: None,
-                    item_type: ItemType::Directory,
                     target_description: target.description.clone(),
                 };
 
@@ -351,13 +337,8 @@ mod tests {
         // Create: project/node_modules/
         let project = tmp.path().join("project");
         fs::create_dir_all(project.join("node_modules")).unwrap();
-        fs::write(project.join("package.json"), "{}").unwrap();
 
-        let results = discover_local_dirs(
-            "node_modules",
-            &[tmp.path().to_path_buf()],
-            Some("package.json"),
-        );
+        let results = discover_local_dirs("node_modules", &[tmp.path().to_path_buf()]);
         assert_eq!(results.len(), 1);
         assert!(results[0].ends_with("node_modules"));
     }
@@ -369,7 +350,7 @@ mod tests {
         let hidden = tmp.path().join(".hidden");
         fs::create_dir_all(hidden.join("node_modules")).unwrap();
 
-        let results = discover_local_dirs("node_modules", &[tmp.path().to_path_buf()], None);
+        let results = discover_local_dirs("node_modules", &[tmp.path().to_path_buf()]);
         assert!(results.is_empty());
     }
 
@@ -379,20 +360,8 @@ mod tests {
         let project = tmp.path().join("project");
         fs::create_dir_all(project.join("target")).unwrap();
 
-        let results = discover_local_dirs("target", &[tmp.path().to_path_buf()], None);
+        let results = discover_local_dirs("target", &[tmp.path().to_path_buf()]);
         assert_eq!(results.len(), 1);
-    }
-
-    #[test]
-    fn discover_local_dirs_missing_indicator() {
-        let tmp = TempDir::new().unwrap();
-        // Create target dir but no Cargo.toml indicator
-        let project = tmp.path().join("project");
-        fs::create_dir_all(project.join("target")).unwrap();
-
-        let results =
-            discover_local_dirs("target", &[tmp.path().to_path_buf()], Some("Cargo.toml"));
-        assert!(results.is_empty());
     }
 
     // --- local_item_name ---
@@ -430,9 +399,7 @@ mod tests {
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
             targets: vec![crate::module::manifest::Target {
-                path: Some(target_dir.to_str().unwrap().to_string()),
-                name: None,
-                indicator: None,
+                path: target_dir.to_str().unwrap().to_string(),
                 description: None,
             }],
         };

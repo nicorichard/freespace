@@ -5,6 +5,5 @@ author = "tester"
 platforms = ["macos", "linux"]
 
 [[targets]]
-name = "node_modules"
-indicator = "package.json"
+path = "**/node_modules"
 description = "Node.js dependencies"

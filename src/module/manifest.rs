@@ -14,14 +14,12 @@ pub struct Module {
     pub targets: Vec<Target>,
 }
 
-/// A target that a module scans. Either a global target (has `path`) or a local
-/// target (has `name`) that is discovered by searching configured directories.
+/// A target that a module scans. Uses `path` for fixed paths (supports `~` and
+/// glob `*`) or `**/dirname` for recursive local search across search directories.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct Target {
-    pub path: Option<String>,
-    pub name: Option<String>,
-    pub indicator: Option<String>,
+    pub path: String,
     pub description: Option<String>,
 }
 
@@ -49,11 +47,7 @@ mod tests {
         assert_eq!(module.name, "test-module");
         assert_eq!(module.version, "1.0.0");
         assert_eq!(module.targets.len(), 1);
-        assert_eq!(
-            module.targets[0].path.as_deref(),
-            Some("~/Library/Caches/test")
-        );
-        assert!(module.targets[0].name.is_none());
+        assert_eq!(module.targets[0].path, "~/Library/Caches/test");
     }
 
     #[test]
@@ -66,13 +60,11 @@ mod tests {
         platforms = ["macos", "linux"]
 
         [[targets]]
-        name = "node_modules"
-        indicator = "package.json"
+        path = "**/node_modules"
         description = "Node dependencies"
         "#;
         let module: Module = toml::from_str(toml_str).unwrap();
-        assert_eq!(module.targets[0].name.as_deref(), Some("node_modules"));
-        assert_eq!(module.targets[0].indicator.as_deref(), Some("package.json"));
+        assert_eq!(module.targets[0].path, "**/node_modules");
     }
 
     #[test]
@@ -89,7 +81,7 @@ mod tests {
         description = "Foo"
 
         [[targets]]
-        name = "bar"
+        path = "**/bar"
         description = "Bar"
         "#;
         let module: Module = toml::from_str(toml_str).unwrap();

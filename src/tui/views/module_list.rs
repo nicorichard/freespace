@@ -17,7 +17,7 @@ fn is_global(app: &App, idx: usize) -> bool {
         .module
         .targets
         .iter()
-        .all(|t| t.path.is_some())
+        .all(|t| !t.path.starts_with("**/"))
 }
 
 /// Sort module indices: global first, then local; by size descending within
@@ -383,9 +383,7 @@ mod tests {
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
             targets: vec![Target {
-                path: Some("~/test".to_string()),
-                name: None,
-                indicator: None,
+                path: "~/test".to_string(),
                 description: None,
             }],
         };
@@ -413,9 +411,7 @@ mod tests {
                 author: "tester".to_string(),
                 platforms: vec!["macos".to_string()],
                 targets: vec![Target {
-                    path: Some("~/x".to_string()),
-                    name: None,
-                    indicator: None,
+                    path: "~/x".to_string(),
                     description: None,
                 }],
             },

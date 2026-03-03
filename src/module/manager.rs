@@ -131,40 +131,9 @@ pub fn load_builtin_modules(modules_dir: &Path) -> (Vec<Module>, Vec<String>) {
 }
 
 /// Parse a single module.toml file into a Module struct.
-/// Validates that each target has exactly one of `path` or `name`,
-/// and that `indicator` is only used with `name` targets.
 fn load_module(path: &Path) -> anyhow::Result<Module> {
     let content = fs::read_to_string(path)?;
     let module: Module = toml::from_str(&content)?;
-
-    for (i, target) in module.targets.iter().enumerate() {
-        match (&target.path, &target.name) {
-            (Some(_), Some(_)) => {
-                anyhow::bail!(
-                    "target {} has both 'path' and 'name'; each target must have exactly one",
-                    i + 1
-                );
-            }
-            (None, None) => {
-                anyhow::bail!(
-                    "target {} has neither 'path' nor 'name'; each target must have exactly one",
-                    i + 1
-                );
-            }
-            (Some(_), None) => {
-                if target.indicator.is_some() {
-                    anyhow::bail!(
-                        "target {} uses 'indicator' with a 'path' target; 'indicator' is only valid with 'name' targets",
-                        i + 1
-                    );
-                }
-            }
-            (None, Some(_)) => {
-                // Local target with name — valid
-            }
-        }
-    }
-
     Ok(module)
 }
 
