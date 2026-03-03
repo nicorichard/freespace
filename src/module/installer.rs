@@ -385,7 +385,7 @@ fn parse_manifest(path: &Path) -> Result<Module, InstallError> {
         reason: e.to_string(),
     })?;
 
-    toml::from_str(&content).map_err(|e| InstallError::ManifestParseError {
+    Module::parse(&content).map_err(|e| InstallError::ManifestParseError {
         path: path.display().to_string(),
         reason: e.to_string(),
     })
@@ -498,7 +498,8 @@ mod tests {
 
     fn write_module_toml(dir: &Path, name: &str) {
         let toml = format!(
-            r#"name = "{}"
+            r#"id = "{}"
+name = "{}"
 version = "1.0.0"
 description = "Test"
 author = "tester"
@@ -507,7 +508,7 @@ platforms = ["macos", "linux"]
 [[targets]]
 path = "~/test"
 "#,
-            name
+            name, name
         );
         fs::write(dir.join("module.toml"), toml).unwrap();
     }
@@ -595,6 +596,7 @@ path = "~/test"
         };
 
         let module = Module {
+            id: "test-install".to_string(),
             name: "test-install".to_string(),
             version: "1.0.0".to_string(),
             description: "Test".to_string(),
@@ -635,6 +637,7 @@ path = "~/test"
             installed_at: 2000,
         };
         let module = Module {
+            id: "upgrade".to_string(),
             name: "upgrade".to_string(),
             version: "2.0.0".to_string(),
             description: "Test".to_string(),

@@ -7,7 +7,8 @@ use ratatui::Frame;
 
 use crate::app::{matches_filter, App, ItemType, ModuleStatus};
 use crate::tui::widgets::{
-    checkbox_str, format_size, format_size_or_placeholder, keybinding_bar, module_icon, CheckState,
+    checkbox_str, format_size, format_size_or_placeholder, keybinding_bar, module_icon,
+    render_status_line, CheckState,
 };
 
 /// Spinner characters that cycle during loading.
@@ -296,8 +297,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize
             &app.theme,
         )
     };
-    let status = Paragraph::new(line);
-    frame.render_widget(status, area);
+    render_status_line(frame, area, line, &app.theme);
 }
 
 #[cfg(test)]
@@ -309,6 +309,7 @@ mod tests {
 
     fn make_detail_app() -> App {
         let module = Module {
+            id: "test-module".to_string(),
             name: "test-module".to_string(),
             version: "1.0.0".to_string(),
             description: "test".to_string(),
@@ -374,6 +375,7 @@ mod tests {
     #[test]
     fn render_does_not_panic_empty_items() {
         let module = Module {
+            id: "empty".to_string(),
             name: "empty".to_string(),
             version: "1.0.0".to_string(),
             description: "test".to_string(),

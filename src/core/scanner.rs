@@ -393,6 +393,7 @@ mod tests {
         fs::write(target_dir.join("file.dat"), vec![0u8; 512]).unwrap();
 
         let module = Module {
+            id: "test".to_string(),
             name: "test".to_string(),
             version: "1.0.0".to_string(),
             description: "test module".to_string(),

@@ -133,8 +133,7 @@ pub fn load_builtin_modules(modules_dir: &Path) -> (Vec<Module>, Vec<String>) {
 /// Parse a single module.toml file into a Module struct.
 fn load_module(path: &Path) -> anyhow::Result<Module> {
     let content = fs::read_to_string(path)?;
-    let module: Module = toml::from_str(&content)?;
-    Ok(module)
+    Module::parse(&content)
 }
 
 /// Return the current platform string matching module manifest conventions.
@@ -156,7 +155,8 @@ mod tests {
         fs::create_dir_all(&module_dir).unwrap();
         let platforms_str: Vec<String> = platforms.iter().map(|p| format!("\"{}\"", p)).collect();
         let toml = format!(
-            r#"name = "{}"
+            r#"id = "{}"
+name = "{}"
 version = "1.0.0"
 description = "Test"
 author = "tester"
@@ -165,6 +165,7 @@ platforms = [{}]
 [[targets]]
 path = "~/test"
 "#,
+            name,
             name,
             platforms_str.join(", ")
         );

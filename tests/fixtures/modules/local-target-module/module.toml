@@ -1,3 +1,4 @@
+id = "local-target-test"
 name = "local-target-test"
 version = "1.0.0"
 description = "Module with local targets"

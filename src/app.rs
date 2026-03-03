@@ -48,6 +48,10 @@ pub struct App {
     pub drill_stack: Vec<DrillLevel>,
     /// Saved selected_index for the module list so we can restore it on back navigation.
     pub module_list_index: usize,
+    /// Total disk capacity in bytes (root filesystem).
+    pub disk_total: Option<u64>,
+    /// Free disk space in bytes (root filesystem).
+    pub disk_free: Option<u64>,
 }
 
 impl App {
@@ -70,6 +74,8 @@ impl App {
             ScanStatus::Scanning
         };
 
+        let (disk_total, disk_free) = disk_stats().unzip();
+
         Self {
             modules,
             current_view: View::ModuleList,
@@ -87,6 +93,8 @@ impl App {
             tick_count: 0,
             drill_stack: Vec::new(),
             module_list_index: 0,
+            disk_total,
+            disk_free,
         }
     }
 
@@ -768,6 +776,16 @@ impl App {
 
         // Clear selected items
         self.selected_items.clear();
+
+        // Refresh disk stats after cleanup
+        self.refresh_disk_stats();
+    }
+
+    /// Re-query disk stats and update fields.
+    fn refresh_disk_stats(&mut self) {
+        let (total, free) = disk_stats().unzip();
+        self.disk_total = total;
+        self.disk_free = free;
     }
 
     fn handle_key_help(&mut self, key: KeyCode) {
@@ -846,8 +864,30 @@ impl App {
             tick_count: 0,
             drill_stack: Vec::new(),
             module_list_index: 0,
+            disk_total: None,
+            disk_free: None,
         }
     }
+}
+
+/// Query total and free disk space for the root filesystem.
+#[cfg(unix)]
+fn disk_stats() -> Option<(u64, u64)> {
+    use std::ffi::CString;
+    let path = CString::new("/").ok()?;
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    let ret = unsafe { libc::statvfs(path.as_ptr(), &mut stat) };
+    if ret != 0 {
+        return None;
+    }
+    let total = stat.f_blocks as u64 * stat.f_frsize as u64;
+    let free = stat.f_bavail as u64 * stat.f_frsize as u64;
+    Some((total, free))
+}
+
+#[cfg(not(unix))]
+fn disk_stats() -> Option<(u64, u64)> {
+    None
 }
 
 /// Which view is currently displayed.
@@ -921,6 +961,7 @@ mod tests {
     /// Helper to create a test module with items.
     fn make_module(name: &str, items: Vec<(&str, u64)>) -> ModuleState {
         let module = Module {
+            id: name.to_string(),
             name: name.to_string(),
             version: "1.0.0".to_string(),
             description: "test".to_string(),

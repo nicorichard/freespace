@@ -1,3 +1,4 @@
+id = "test-single"
 name = "test-single"
 version = "1.0.0"
 description = "A single test module"

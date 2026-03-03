@@ -43,13 +43,13 @@ enum ModuleCommand {
     List,
     /// Remove an installed module
     Remove {
-        /// Name of the module to remove
-        name: String,
+        /// ID of the module to remove
+        id: String,
     },
     /// Inspect a module's manifest and source
     Inspect {
-        /// Name of the module to inspect
-        name: String,
+        /// ID of the module to inspect
+        id: String,
     },
 }
 
@@ -107,11 +107,11 @@ async fn main() -> anyhow::Result<()> {
                 ModuleCommand::List => {
                     cmd_list(&modules_dir);
                 }
-                ModuleCommand::Remove { name } => {
-                    cmd_remove(&modules_dir, &name)?;
+                ModuleCommand::Remove { id } => {
+                    cmd_remove(&modules_dir, &id)?;
                 }
-                ModuleCommand::Inspect { name } => {
-                    cmd_inspect(&modules_dir, &name)?;
+                ModuleCommand::Inspect { id } => {
+                    cmd_inspect(&modules_dir, &id)?;
                 }
             }
         }
@@ -146,7 +146,7 @@ fn cmd_list(modules_dir: &std::path::Path) {
             Ok(c) => c,
             Err(_) => continue,
         };
-        let module: module::manifest::Module = match toml::from_str(&content) {
+        let module = match module::manifest::Module::parse(&content) {
             Ok(m) => m,
             Err(_) => continue,
         };
@@ -154,7 +154,7 @@ fn cmd_list(modules_dir: &std::path::Path) {
         let source = module::installer::read_source_info(&path);
 
         if !found {
-            println!("{:<20} {:<10} SOURCE", "NAME", "VERSION");
+            println!("{:<20} {:<20} {:<10} SOURCE", "ID", "NAME", "VERSION");
             found = true;
         }
 
@@ -163,7 +163,10 @@ fn cmd_list(modules_dir: &std::path::Path) {
             None => "local".to_string(),
         };
 
-        println!("{:<20} {:<10} {}", module.name, module.version, source_str);
+        println!(
+            "{:<20} {:<20} {:<10} {}",
+            module.id, module.name, module.version, source_str
+        );
     }
 
     if !found {
@@ -171,21 +174,22 @@ fn cmd_list(modules_dir: &std::path::Path) {
     }
 }
 
-/// Remove an installed module by name.
-fn cmd_remove(modules_dir: &std::path::Path, name: &str) -> anyhow::Result<()> {
-    let module_dir = find_module_dir(modules_dir, name)?;
+/// Remove an installed module by id.
+fn cmd_remove(modules_dir: &std::path::Path, id: &str) -> anyhow::Result<()> {
+    let module_dir = find_module_dir(modules_dir, id)?;
     fs::remove_dir_all(&module_dir)?;
-    println!("Removed module '{}'.", name);
+    println!("Removed module '{}'.", id);
     Ok(())
 }
 
 /// Inspect an installed module's manifest and source information.
-fn cmd_inspect(modules_dir: &std::path::Path, name: &str) -> anyhow::Result<()> {
-    let module_dir = find_module_dir(modules_dir, name)?;
+fn cmd_inspect(modules_dir: &std::path::Path, id: &str) -> anyhow::Result<()> {
+    let module_dir = find_module_dir(modules_dir, id)?;
 
     let manifest_content = fs::read_to_string(module_dir.join("module.toml"))?;
-    let module: module::manifest::Module = toml::from_str(&manifest_content)?;
+    let module = module::manifest::Module::parse(&manifest_content)?;
 
+    println!("Id: {}", module.id);
     println!("Module: {}", module.name);
     println!("Version: {}", module.version);
     println!("Description: {}", module.description);
@@ -216,18 +220,15 @@ fn cmd_inspect(modules_dir: &std::path::Path, name: &str) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// Find a module directory by module name (checks both directory name and manifest name).
-fn find_module_dir(
-    modules_dir: &std::path::Path,
-    name: &str,
-) -> anyhow::Result<std::path::PathBuf> {
+/// Find a module directory by module id (checks both directory name and manifest id).
+fn find_module_dir(modules_dir: &std::path::Path, id: &str) -> anyhow::Result<std::path::PathBuf> {
     // First try direct directory name match
-    let direct = modules_dir.join(name);
+    let direct = modules_dir.join(id);
     if direct.is_dir() && direct.join("module.toml").exists() {
         return Ok(direct);
     }
 
-    // Fall back to scanning manifests for matching name
+    // Fall back to scanning manifests for matching id
     if let Ok(entries) = fs::read_dir(modules_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -239,8 +240,8 @@ fn find_module_dir(
                 continue;
             }
             if let Ok(content) = fs::read_to_string(&manifest_path) {
-                if let Ok(module) = toml::from_str::<module::manifest::Module>(&content) {
-                    if module.name == name {
+                if let Ok(module) = module::manifest::Module::parse(&content) {
+                    if module.id == id {
                         return Ok(path);
                     }
                 }
@@ -248,5 +249,5 @@ fn find_module_dir(
         }
     }
 
-    anyhow::bail!("module '{}' not found", name)
+    anyhow::bail!("module '{}' not found", id)
 }

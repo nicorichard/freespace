@@ -7,7 +7,9 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Table
 use ratatui::Frame;
 
 use crate::app::{matches_filter, App};
-use crate::tui::widgets::{format_size, format_size_or_placeholder, keybinding_bar};
+use crate::tui::widgets::{
+    format_size, format_size_or_placeholder, keybinding_bar, render_status_line,
+};
 
 /// Collect selected items across all modules into a flat list of (name, path_display, size).
 /// Also includes items selected during drill-in that aren't direct module items.
@@ -277,8 +279,7 @@ fn render_action_bar(app: &App, frame: &mut Frame, area: Rect, shown: usize, tot
             &app.theme,
         )
     };
-    let action = Paragraph::new(line);
-    frame.render_widget(action, area);
+    render_status_line(frame, area, line, &app.theme);
 }
 
 #[cfg(test)]
@@ -290,6 +291,7 @@ mod tests {
 
     fn make_confirm_app() -> App {
         let module = Module {
+            id: "test".to_string(),
             name: "test".to_string(),
             version: "1.0.0".to_string(),
             description: "test".to_string(),

@@ -9,6 +9,7 @@ use freespace::module::manifest::{Module, Target};
 
 fn make_global_module(name: &str, path: &str) -> Module {
     Module {
+        id: name.to_string(),
         name: name.to_string(),
         version: "1.0.0".to_string(),
         description: "test".to_string(),
@@ -23,6 +24,7 @@ fn make_global_module(name: &str, path: &str) -> Module {
 
 fn make_local_module(name: &str, dir_name: &str) -> Module {
     Module {
+        id: name.to_string(),
         name: name.to_string(),
         version: "1.0.0".to_string(),
         description: "test".to_string(),
