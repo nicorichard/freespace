@@ -15,15 +15,13 @@ fn make_global_module(name: &str, path: &str) -> Module {
         author: "tester".to_string(),
         platforms: vec!["macos".to_string(), "linux".to_string()],
         targets: vec![Target {
-            path: Some(path.to_string()),
-            name: None,
-            indicator: None,
+            path: path.to_string(),
             description: None,
         }],
     }
 }
 
-fn make_local_module(name: &str, dir_name: &str, indicator: Option<&str>) -> Module {
+fn make_local_module(name: &str, dir_name: &str) -> Module {
     Module {
         name: name.to_string(),
         version: "1.0.0".to_string(),
@@ -31,9 +29,7 @@ fn make_local_module(name: &str, dir_name: &str, indicator: Option<&str>) -> Mod
         author: "tester".to_string(),
         platforms: vec!["macos".to_string(), "linux".to_string()],
         targets: vec![Target {
-            path: None,
-            name: Some(dir_name.to_string()),
-            indicator: indicator.map(|s| s.to_string()),
+            path: format!("**/{}", dir_name),
             description: None,
         }],
     }
@@ -92,24 +88,23 @@ async fn scan_global_target() {
 }
 
 #[tokio::test]
-async fn scan_local_target_with_indicator() {
+async fn scan_local_target() {
     let tmp = TempDir::new().unwrap();
 
-    // Create: project-a/node_modules/ + project-a/package.json
+    // Create: project-a/node_modules/
     let project_a = tmp.path().join("project-a");
     fs::create_dir_all(project_a.join("node_modules")).unwrap();
-    fs::write(project_a.join("package.json"), "{}").unwrap();
     fs::write(
         project_a.join("node_modules").join("dep.js"),
         vec![0u8; 512],
     )
     .unwrap();
 
-    // Create: project-b/node_modules/ (NO package.json — should be skipped)
+    // Create: project-b/node_modules/
     let project_b = tmp.path().join("project-b");
     fs::create_dir_all(project_b.join("node_modules")).unwrap();
 
-    let module = make_local_module("npm", "node_modules", Some("package.json"));
+    let module = make_local_module("npm", "node_modules");
     let search_dirs = vec![tmp.path().to_path_buf()];
 
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -136,9 +131,8 @@ async fn scan_local_target_with_indicator() {
         }
     }
 
-    // Only project-a should match (has package.json indicator)
-    assert_eq!(items.len(), 1);
-    assert!(items[0].contains("project-a"));
+    // Both projects should match
+    assert_eq!(items.len(), 2);
 }
 
 #[tokio::test]

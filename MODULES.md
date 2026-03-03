@@ -44,12 +44,8 @@ Every module must have a `module.toml` at the root of its directory. All top-lev
 | `author` | String | Yes | Author name or handle |
 | `platforms` | Array of strings | Yes | Supported platforms: `"macos"`, `"linux"`, `"windows"` |
 | `[[targets]]` | Array of tables | Yes | At least one target required |
-| `targets.path` | String | One of `path` or `name` | Path pattern for global targets (supports `~` and `*`) |
-| `targets.name` | String | One of `path` or `name` | Directory name for local targets (discovered via search) |
-| `targets.indicator` | String | No | Sibling file that must exist in parent dir (local targets only) |
+| `targets.path` | String | Yes | Path pattern (supports `~`, `*`, and `**/` for recursive search) |
 | `targets.description` | String | No | What this specific target contains |
-
-Each target must have exactly one of `path` or `name`. The `indicator` field is only valid on local (`name`) targets.
 
 Modules with a `platforms` list that doesn't include the current OS are silently skipped.
 
@@ -82,20 +78,19 @@ Each matched path becomes a separate item in the TUI. If a glob matches nothing,
 
 ## Local Targets
 
-Local targets discover directories by **name** across the user's project directories. Instead of a fixed `path`, you specify the directory `name` to search for:
+Local targets discover directories by name across the user's project directories using `**/` prefix notation (familiar from `.gitignore`):
 
 ```toml
 [[targets]]
-name = "node_modules"
+path = "**/node_modules"
 description = "Node.js dependencies"
 
 [[targets]]
-name = "target"
+path = "**/target"
 description = "Rust build artifacts"
-indicator = "Cargo.toml"   # only match when parent has Cargo.toml
 ```
 
-The `indicator` field is optional. When set, a match is only reported if the indicator file exists as a sibling in the parent directory. This prevents false positives (e.g. a `target/` directory that isn't a Rust build output).
+The `**/` prefix tells freespace to recursively search through configured search directories for directories matching the given name. Hidden directories are skipped, and the scanner does not recurse into matched directories.
 
 Discovered items are displayed with project context: `my-app/node_modules` rather than just `node_modules`.
 
