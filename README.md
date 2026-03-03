@@ -32,6 +32,14 @@ That's it. No scripts, no plugins — just a declaration of where disk space hid
 
 ## Install
 
+### With [mise](https://mise.jdx.dev)
+
+```sh
+mise use -g github:nicorichard/freespace@latest
+```
+
+### From source
+
 ```sh
 cargo build --release
 # Binary at target/release/freespace
