@@ -84,6 +84,7 @@ fn render_keybindings(app: &App, frame: &mut Frame, area: Rect) {
         keybinding_row("Space", "Toggle module selection", key_style, desc_style),
         keybinding_row("a", "Select all modules", key_style, desc_style),
         keybinding_row("n", "Deselect all modules", key_style, desc_style),
+        keybinding_row("i", "Module info", key_style, desc_style),
         keybinding_row("/", "Filter list", key_style, desc_style),
         keybinding_row("c", "Clean selected items", key_style, desc_style),
         Row::new(vec![Span::raw(""), Span::raw("")]),
@@ -99,6 +100,7 @@ fn render_keybindings(app: &App, frame: &mut Frame, area: Rect) {
         keybinding_row("n", "Deselect all items", key_style, desc_style),
         keybinding_row("Enter", "Drill into directory", key_style, desc_style),
         keybinding_row("o", "Open in file manager", key_style, desc_style),
+        keybinding_row("i", "Module info", key_style, desc_style),
         keybinding_row("/", "Filter list", key_style, desc_style),
         keybinding_row("c", "Clean selected items", key_style, desc_style),
         keybinding_row(

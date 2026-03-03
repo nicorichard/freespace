@@ -14,7 +14,7 @@ use crate::module::manifest::Module;
 pub fn load_all_modules(
     default_dir: Option<PathBuf>,
     extra_dirs: &[String],
-) -> (Vec<Module>, Vec<String>) {
+) -> (Vec<(Module, PathBuf)>, Vec<String>) {
     let mut all_modules = Vec::new();
     let mut all_warnings = Vec::new();
 
@@ -74,7 +74,7 @@ fn expand_tilde(path: &str) -> PathBuf {
 /// Scans the given directory for subdirectories containing a `module.toml` file,
 /// parses each one, and filters out modules for unsupported platforms.
 /// Parse errors are collected as warnings rather than failing the entire load.
-pub fn load_builtin_modules(modules_dir: &Path) -> (Vec<Module>, Vec<String>) {
+pub fn load_builtin_modules(modules_dir: &Path) -> (Vec<(Module, PathBuf)>, Vec<String>) {
     let mut modules = Vec::new();
     let mut warnings = Vec::new();
 
@@ -114,7 +114,7 @@ pub fn load_builtin_modules(modules_dir: &Path) -> (Vec<Module>, Vec<String>) {
         match load_module(&manifest_path) {
             Ok(module) => {
                 if module.platforms.iter().any(|p| p == &current_platform) {
-                    modules.push(module);
+                    modules.push((module, manifest_path));
                 }
             }
             Err(e) => {
@@ -188,7 +188,7 @@ path = "~/test"
 
         let (modules, warnings) = load_builtin_modules(tmp.path());
         assert_eq!(modules.len(), 1);
-        assert_eq!(modules[0].name, "test-mod");
+        assert_eq!(modules[0].0.name, "test-mod");
         assert!(warnings.is_empty());
     }
 
