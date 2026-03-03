@@ -9,7 +9,8 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use tokio::sync::mpsc;
 
 use crate::config::AppConfig;
-use crate::core::cleaner;
+use crate::core::cleaner::{self, CleanupOptions};
+use crate::core::safety;
 use crate::core::scanner::{self, ScanMessage};
 use crate::module::manager;
 use crate::module::manifest::Module;
@@ -56,13 +57,22 @@ pub struct App {
     pub disk_total: Option<u64>,
     /// Free disk space in bytes (root filesystem).
     pub disk_free: Option<u64>,
+    /// Whether to simulate cleanup without deleting.
+    pub dry_run: bool,
+    /// User-configured protected paths (expanded to absolute).
+    pub protected_paths: Vec<PathBuf>,
+    /// Whether to write audit log entries.
+    pub audit_log: bool,
 }
 
 impl App {
     /// Create a new App with default state, load modules, and start scanning.
-    pub fn new(cli_module_dirs: Vec<String>, cli_search_dirs: Vec<String>) -> Self {
-        let (modules, search_dirs) =
+    pub fn new(cli_module_dirs: Vec<String>, cli_search_dirs: Vec<String>, dry_run: bool) -> Self {
+        let (modules, search_dirs, config) =
             Self::load_modules_and_config(cli_module_dirs, cli_search_dirs);
+
+        let protected_paths = safety::expand_protected_paths(&config.protected_paths);
+        let audit_log = config.audit_log;
 
         // Create channel for scan messages
         let (tx, rx) = mpsc::unbounded_channel();
@@ -101,15 +111,18 @@ impl App {
             module_list_index: 0,
             disk_total,
             disk_free,
+            dry_run,
+            protected_paths,
+            audit_log,
         }
     }
 
     /// Discover and load modules from all configured directories.
-    /// Returns module states and expanded search_dirs paths.
+    /// Returns module states, expanded search_dirs paths, and the loaded config.
     fn load_modules_and_config(
         cli_module_dirs: Vec<String>,
         cli_search_dirs: Vec<String>,
-    ) -> (Vec<ModuleState>, Vec<PathBuf>) {
+    ) -> (Vec<ModuleState>, Vec<PathBuf>, AppConfig) {
         // Load config file (warnings on failure, use defaults)
         let config = match AppConfig::load() {
             Ok(config) => config,
@@ -166,7 +179,7 @@ impl App {
             })
             .collect();
 
-        (module_states, search_dirs)
+        (module_states, search_dirs, config)
     }
 
     /// Run the main event loop: poll input -> update state -> render.
@@ -775,10 +788,18 @@ impl App {
     fn perform_cleanup(&mut self, permanent: bool) {
         let paths: Vec<std::path::PathBuf> = self.selected_items.iter().cloned().collect();
 
+        let opts = CleanupOptions {
+            dry_run: self.dry_run,
+            protected_paths: self.protected_paths.clone(),
+            module_id: String::new(),
+            audit_log: self.audit_log,
+            enforce_scope: true,
+        };
+
         let result = if permanent {
-            cleaner::delete_items(&paths)
+            cleaner::delete_items(&paths, &opts)
         } else {
-            cleaner::trash_items(&paths)
+            cleaner::trash_items(&paths, &opts)
         };
 
         // Remove successfully deleted items from module state
@@ -941,6 +962,9 @@ impl App {
             module_list_index: 0,
             disk_total: None,
             disk_free: None,
+            dry_run: false,
+            protected_paths: Vec::new(),
+            audit_log: false,
         }
     }
 }

@@ -3,6 +3,8 @@
 use anyhow::{bail, Result};
 use serde::Deserialize;
 
+use crate::core::safety;
+
 /// Represents a parsed module manifest (module.toml).
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
@@ -21,6 +23,9 @@ impl Module {
     pub fn parse(toml_str: &str) -> Result<Module> {
         let module: Module = toml::from_str(toml_str)?;
         validate_id(&module.id)?;
+        for target in &module.targets {
+            safety::validate_target_pattern(&target.path)?;
+        }
         Ok(module)
     }
 }
@@ -206,6 +211,23 @@ mod tests {
     #[test]
     fn invalid_id_leading_hyphen() {
         assert!(validate_id("-leading").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_traversal_in_target() {
+        let toml_str = r#"
+        id = "evil"
+        name = "evil"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+
+        [[targets]]
+        path = "~/Library/../../../etc/passwd"
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains(".."));
     }
 
     #[test]

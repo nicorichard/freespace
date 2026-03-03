@@ -19,6 +19,10 @@ struct Cli {
     #[arg(long = "search-dir", global = true)]
     search_dirs: Vec<String>,
 
+    /// Simulate cleanup without actually deleting anything
+    #[arg(long)]
+    dry_run: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -66,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
             let mut terminal = tui::init()?;
 
             // Create app and run the main event loop
-            let mut app = app::App::new(cli.module_dirs, cli.search_dirs);
+            let mut app = app::App::new(cli.module_dirs, cli.search_dirs, cli.dry_run);
             app.run(&mut terminal)?;
 
             // Restore terminal on normal exit

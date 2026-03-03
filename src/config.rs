@@ -21,6 +21,8 @@ pub struct AppConfig {
     pub dry_run: bool,
     pub module_dirs: Vec<String>,
     pub search_dirs: Vec<String>,
+    pub audit_log: bool,
+    pub protected_paths: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -29,6 +31,8 @@ impl Default for AppConfig {
             dry_run: true,
             module_dirs: Vec::new(),
             search_dirs: Vec::new(),
+            audit_log: true,
+            protected_paths: Vec::new(),
         }
     }
 }
@@ -77,6 +81,8 @@ mod tests {
         assert!(config.dry_run);
         assert!(config.module_dirs.is_empty());
         assert!(config.search_dirs.is_empty());
+        assert!(config.audit_log);
+        assert!(config.protected_paths.is_empty());
     }
 
     #[test]
@@ -91,10 +97,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_config_with_safety_fields() {
+        let toml_str = r#"
+        audit_log = false
+        protected_paths = ["~/Work", "~/important-project"]
+        "#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.audit_log);
+        assert_eq!(
+            config.protected_paths,
+            vec!["~/Work", "~/important-project"]
+        );
+    }
+
+    #[test]
     fn parse_empty_config() {
         let config: AppConfig = toml::from_str("").unwrap();
         assert!(config.module_dirs.is_empty());
         assert!(config.search_dirs.is_empty());
+        assert!(config.audit_log);
+        assert!(config.protected_paths.is_empty());
     }
 
     #[test]
