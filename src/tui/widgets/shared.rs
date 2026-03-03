@@ -1,5 +1,38 @@
 // Shared widget utilities used by both module list and module detail views.
 
+use ratatui::text::{Line, Span};
+
+use crate::tui::theme::Theme;
+
+/// Build a styled keybinding bar from a slice of (key, action) pairs.
+///
+/// Renders as: `[key] action │ [key] action │ ...`
+/// - Brackets `[` `]` in the theme's muted/border color
+/// - Key text inside brackets in the theme's accent (size_fg) color
+/// - Action text in the theme's muted/border color
+/// - Separator `│` in dim border color
+pub fn keybinding_bar<'a>(bindings: &[(&'a str, &'a str)], theme: &Theme) -> Line<'a> {
+    let bracket_style = theme.style_border();
+    let key_style = theme.style_size();
+    let action_style = theme.style_border();
+    let sep_style = theme.style_border();
+
+    let mut spans: Vec<Span<'a>> = Vec::new();
+    spans.push(Span::raw(" "));
+
+    for (i, (key, action)) in bindings.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" \u{2502} ", sep_style));
+        }
+        spans.push(Span::styled("[", bracket_style));
+        spans.push(Span::styled(*key, key_style));
+        spans.push(Span::styled("] ", bracket_style));
+        spans.push(Span::styled(*action, action_style));
+    }
+
+    Line::from(spans)
+}
+
 /// Get an emoji icon for a module based on its name.
 pub fn module_icon(name: &str) -> &'static str {
     let lower = name.to_lowercase();

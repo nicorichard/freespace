@@ -8,7 +8,7 @@ use ratatui::Frame;
 
 use crate::app::{matches_filter, App, ModuleStatus, ScanStatus};
 use crate::tui::widgets::{
-    checkbox_str, format_size, format_size_or_placeholder, module_icon, CheckState,
+    checkbox_str, format_size, format_size_or_placeholder, keybinding_bar, module_icon, CheckState,
 };
 
 /// Check whether the module at the given index uses only global (path-based) targets.
@@ -358,11 +358,18 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
             Span::styled("/ filter  Esc clear", app.theme.style_normal()),
         ])
     } else {
-        // Default status bar
-        Line::from(vec![Span::styled(
-            " \u{2191}/\u{2193} navigate  \u{2190}/\u{2192} section  Space select  a all  n none  Enter details  / filter  c clean  ? help  q quit ",
-            app.theme.style_normal(),
-        )])
+        keybinding_bar(
+            &[
+                ("space", "select"),
+                ("a", "all"),
+                ("n", "none"),
+                ("/", "filter"),
+                ("c", "clean"),
+                ("?", "help"),
+                ("q", "quit"),
+            ],
+            &app.theme,
+        )
     };
     let status = Paragraph::new(line);
     frame.render_widget(status, area);

@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Table
 use ratatui::Frame;
 
 use crate::app::{matches_filter, App};
-use crate::tui::widgets::{format_size, format_size_or_placeholder};
+use crate::tui::widgets::{format_size, format_size_or_placeholder, keybinding_bar};
 
 /// Collect selected items across all modules into a flat list of (name, path_display, size).
 /// Also includes items selected during drill-in that aren't direct module items.
@@ -266,11 +266,16 @@ fn render_action_bar(app: &App, frame: &mut Frame, area: Rect, shown: usize, tot
             Span::styled("/ filter  Esc clear", app.theme.style_normal()),
         ])
     } else {
-        // Default action bar
-        Line::from(vec![Span::styled(
-            " t trash  d delete  n/Esc cancel  \u{2191}/\u{2193} scroll  / filter  q quit ",
-            app.theme.style_normal(),
-        )])
+        keybinding_bar(
+            &[
+                ("t", "trash"),
+                ("d", "delete"),
+                ("n", "cancel"),
+                ("/", "filter"),
+                ("q", "quit"),
+            ],
+            &app.theme,
+        )
     };
     let action = Paragraph::new(line);
     frame.render_widget(action, area);

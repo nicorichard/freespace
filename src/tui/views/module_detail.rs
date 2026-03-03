@@ -7,7 +7,7 @@ use ratatui::Frame;
 
 use crate::app::{matches_filter, App, ItemType, ModuleStatus};
 use crate::tui::widgets::{
-    checkbox_str, format_size, format_size_or_placeholder, module_icon, CheckState,
+    checkbox_str, format_size, format_size_or_placeholder, keybinding_bar, module_icon, CheckState,
 };
 
 /// Spinner characters that cycle during loading.
@@ -261,8 +261,6 @@ fn render_path_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) 
 }
 
 fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
-    let drilled = !app.drill_stack.is_empty();
-
     let line = if app.filter_active {
         // Active filter input mode
         Line::from(vec![
@@ -282,18 +280,21 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize
             ),
             Span::styled("/ filter  Esc clear", app.theme.style_normal()),
         ])
-    } else if drilled {
-        // Drilled-in status bar
-        Line::from(vec![Span::styled(
-            " \u{2191}/\u{2193} navigate  Space select  a all  n none  o open  / filter  Enter drill  c clean  Backspace/Esc back  ? help  q quit ",
-            app.theme.style_normal(),
-        )])
     } else {
-        // Default status bar
-        Line::from(vec![Span::styled(
-            " \u{2191}/\u{2193} navigate  Space select  a all  n none  o open  / filter  Enter drill  c clean  Esc back  ? help  q quit ",
-            app.theme.style_normal(),
-        )])
+        keybinding_bar(
+            &[
+                ("space", "select"),
+                ("a", "all"),
+                ("n", "none"),
+                ("o", "open"),
+                ("/", "filter"),
+                ("c", "clean"),
+                ("esc", "back"),
+                ("?", "help"),
+                ("q", "quit"),
+            ],
+            &app.theme,
+        )
     };
     let status = Paragraph::new(line);
     frame.render_widget(status, area);
