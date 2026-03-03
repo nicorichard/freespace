@@ -335,6 +335,8 @@ impl App {
             match key {
                 KeyCode::Char('n') => KeyCode::Down,
                 KeyCode::Char('p') => KeyCode::Up,
+                KeyCode::Char('f') => KeyCode::Right,
+                KeyCode::Char('b') => KeyCode::Left,
                 _ => key,
             }
         } else {
@@ -345,7 +347,7 @@ impl App {
         // to the view handler (like fzf), handle everything else as filter input
         if self.filter_active {
             match key {
-                KeyCode::Down | KeyCode::Up => {} // fall through to view handler
+                KeyCode::Down | KeyCode::Up | KeyCode::Left | KeyCode::Right => {} // fall through to view handler
                 _ => {
                     self.handle_key_filter(key);
                     return;
@@ -424,6 +426,32 @@ impl App {
                     } else {
                         self.selected_index - 1
                     };
+                }
+            }
+            // Jump to next section (Global -> Local)
+            KeyCode::Char('l') | KeyCode::Right => {
+                if count > 0 {
+                    let first_local = sorted
+                        .iter()
+                        .position(|&idx| !views::module_list::is_global(self, idx));
+                    if let Some(pos) = first_local {
+                        if self.selected_index < pos {
+                            self.selected_index = pos;
+                        }
+                    }
+                }
+            }
+            // Jump to previous section (Local -> Global)
+            KeyCode::Char('h') | KeyCode::Left => {
+                if count > 0 {
+                    let first_local = sorted
+                        .iter()
+                        .position(|&idx| !views::module_list::is_global(self, idx));
+                    if let Some(pos) = first_local {
+                        if self.selected_index >= pos {
+                            self.selected_index = 0;
+                        }
+                    }
                 }
             }
             // Enter detail view for selected module

@@ -12,7 +12,7 @@ use crate::tui::widgets::{
 };
 
 /// Check whether the module at the given index uses only global (path-based) targets.
-fn is_global(app: &App, idx: usize) -> bool {
+pub(crate) fn is_global(app: &App, idx: usize) -> bool {
     app.modules[idx]
         .module
         .targets
@@ -360,7 +360,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
     } else {
         // Default status bar
         Line::from(vec![Span::styled(
-            " \u{2191}/\u{2193} navigate  Space select  a all  n none  Enter details  / filter  c clean  ? help  q quit ",
+            " \u{2191}/\u{2193} navigate  \u{2190}/\u{2192} section  Space select  a all  n none  Enter details  / filter  c clean  ? help  q quit ",
             app.theme.style_normal(),
         )])
     };
