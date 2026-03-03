@@ -8,7 +8,8 @@ use ratatui::Frame;
 
 use crate::app::{matches_filter, App, ModuleStatus, ScanStatus};
 use crate::tui::widgets::{
-    checkbox_str, format_size, format_size_or_placeholder, keybinding_bar, module_icon, CheckState,
+    checkbox_str, format_size, format_size_or_placeholder, keybinding_bar, module_icon,
+    render_status_line, CheckState,
 };
 
 /// Check whether the module at the given index uses only global (path-based) targets.
@@ -109,6 +110,17 @@ const SPINNER_CHARS: &[char] = &[
 fn render_title_bar(app: &App, frame: &mut Frame, area: Rect) {
     let total: u64 = app.modules.iter().filter_map(|m| m.total_size).sum();
 
+    let disk_suffix: Vec<Span> = match (app.disk_free, app.disk_total) {
+        (Some(free), Some(total)) => vec![
+            Span::styled("\u{2502} ", app.theme.style_header()),
+            Span::styled(
+                format!("{} free / {} ", format_size(free), format_size(total)),
+                app.theme.style_header(),
+            ),
+        ],
+        _ => vec![],
+    };
+
     let title_spans = match &app.scan_status {
         ScanStatus::Scanning => {
             let total_modules = app.modules.len();
@@ -125,29 +137,31 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect) {
             );
 
             let any_known = app.modules.iter().any(|m| m.total_size.is_some());
+            let mut spans = vec![
+                Span::styled(" Freespace ", app.theme.style_header()),
+                Span::styled(progress_text, app.theme.style_status_loading()),
+            ];
             if any_known {
-                vec![
-                    Span::styled(" Freespace ", app.theme.style_header()),
-                    Span::styled(progress_text, app.theme.style_status_loading()),
-                    Span::styled(format!(" {} ", format_size(total)), app.theme.style_size()),
-                ]
-            } else {
-                vec![
-                    Span::styled(" Freespace ", app.theme.style_header()),
-                    Span::styled(progress_text, app.theme.style_status_loading()),
-                ]
+                spans.push(Span::styled(
+                    format!(" {} ", format_size(total)),
+                    app.theme.style_size(),
+                ));
             }
+            spans.extend(disk_suffix);
+            spans
         }
         _ => {
             let any_known = app.modules.iter().any(|m| m.total_size.is_some());
-            if any_known {
+            let mut spans = if any_known {
                 vec![Span::styled(
                     format!(" Freespace \u{2014} {} reclaimable ", format_size(total)),
                     app.theme.style_header(),
                 )]
             } else {
                 vec![Span::styled(" Freespace ", app.theme.style_header())]
-            }
+            };
+            spans.extend(disk_suffix);
+            spans
         }
     };
 
@@ -371,8 +385,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
             &app.theme,
         )
     };
-    let status = Paragraph::new(line);
-    frame.render_widget(status, area);
+    render_status_line(frame, area, line, &app.theme);
 }
 
 #[cfg(test)]
@@ -384,6 +397,7 @@ mod tests {
 
     fn make_module(name: &str, size: u64) -> ModuleState {
         let module = Module {
+            id: name.to_string(),
             name: name.to_string(),
             version: "1.0.0".to_string(),
             description: "test".to_string(),
@@ -412,6 +426,7 @@ mod tests {
     fn sorted_excludes_zero_size() {
         let m = ModuleState {
             module: Module {
+                id: "empty".to_string(),
                 name: "empty".to_string(),
                 version: "1.0.0".to_string(),
                 description: "test".to_string(),

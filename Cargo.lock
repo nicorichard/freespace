@@ -419,6 +419,7 @@ dependencies = [
  "dirs",
  "glob",
  "humansize",
+ "libc",
  "predicates",
  "ratatui",
  "serde",

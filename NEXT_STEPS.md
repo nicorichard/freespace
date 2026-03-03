@@ -6,8 +6,8 @@ Track progress by replacing `[ ]` with `[x]` as each task is completed.
 
 - [x] 1. [Header Improvement](tasks/header-improvement.md) — Change "total" to "reclaimable"
 - [x] 2. [Keybindings Helper](tasks/keybindings-helper.md) — Redesign bottom bar with `[key] action` style, shared widget
-- [ ] 3. [Version Display](tasks/version-display.md) — Show `v0.1.0` in bottom-right of status bar
-- [ ] 4. [Module ID](tasks/module-id.md) — Add `id` field to manifests, unify CLI identification
+- [x] 3. [Version Display](tasks/version-display.md) — Show `v0.1.0` in bottom-right of status bar
+- [x] 4. [Module ID](tasks/module-id.md) — Add `id` field to manifests, unify CLI identification
 - [ ] 5. [System Free Space](tasks/system-free-space.md) — Show disk free/total in header via `statvfs`
 - [ ] 6. [Info Pane](tasks/info-pane.md) — `[i]nfo` overlay with module metadata and actions
 - [ ] 7. [Install Selection UX](tasks/install-selection-ux.md) — Replace dialoguer with ratatui multi-select

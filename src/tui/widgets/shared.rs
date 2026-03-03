@@ -1,6 +1,9 @@
 // Shared widget utilities used by both module list and module detail views.
 
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
+use ratatui::Frame;
 
 use crate::tui::theme::Theme;
 
@@ -31,6 +34,24 @@ pub fn keybinding_bar<'a>(bindings: &[(&'a str, &'a str)], theme: &Theme) -> Lin
     }
 
     Line::from(spans)
+}
+
+/// Render a status bar line with a right-aligned version string.
+///
+/// Splits `area` into a left region (for `left` content) and a right region
+/// showing `vX.Y.Z` in dim style.
+pub fn render_status_line(frame: &mut Frame, area: Rect, left: Line<'_>, theme: &Theme) {
+    let version = format!("v{} ", env!("CARGO_PKG_VERSION"));
+    let version_width = version.len() as u16;
+
+    let chunks =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(version_width)]).split(area);
+
+    frame.render_widget(Paragraph::new(left), chunks[0]);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(version, theme.style_border()))),
+        chunks[1],
+    );
 }
 
 /// Get an emoji icon for a module based on its name.
