@@ -165,6 +165,7 @@ pub fn start_scan(
                             path,
                             size: Some(size),
                             item_type,
+                            target_description: target.description.clone(),
                         };
 
                         if tx
@@ -188,6 +189,7 @@ pub fn start_scan(
                             path,
                             size: Some(size),
                             item_type: ItemType::Directory,
+                            target_description: target.description.clone(),
                         };
 
                         if tx

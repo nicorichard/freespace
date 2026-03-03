@@ -421,6 +421,7 @@ mod tests {
                 path: PathBuf::from("/tmp/item"),
                 size: Some(size),
                 item_type: ItemType::Directory,
+                target_description: None,
             }],
             total_size: Some(size),
             status: ModuleStatus::Ready,
