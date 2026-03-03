@@ -121,6 +121,15 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect) {
         _ => vec![],
     };
 
+    let dry_run_spans: Vec<Span> = if app.dry_run {
+        vec![Span::styled(
+            " [DRY RUN] ",
+            app.theme.style_status_loading(),
+        )]
+    } else {
+        vec![]
+    };
+
     let title_spans = match &app.scan_status {
         ScanStatus::Scanning => {
             let total_modules = app.modules.len();
@@ -137,10 +146,12 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect) {
             );
 
             let any_known = app.modules.iter().any(|m| m.total_size.is_some());
-            let mut spans = vec![
-                Span::styled(" Freespace ", app.theme.style_header()),
-                Span::styled(progress_text, app.theme.style_status_loading()),
-            ];
+            let mut spans = vec![Span::styled(" Freespace ", app.theme.style_header())];
+            spans.extend(dry_run_spans.clone());
+            spans.push(Span::styled(
+                progress_text,
+                app.theme.style_status_loading(),
+            ));
             if any_known {
                 spans.push(Span::styled(
                     format!(" {} ", format_size(total)),
@@ -160,6 +171,7 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect) {
             } else {
                 vec![Span::styled(" Freespace ", app.theme.style_header())]
             };
+            spans.extend(dry_run_spans);
             spans.extend(disk_suffix);
             spans
         }
