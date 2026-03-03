@@ -142,7 +142,7 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect) {
             let any_known = app.modules.iter().any(|m| m.total_size.is_some());
             if any_known {
                 vec![Span::styled(
-                    format!(" Freespace \u{2014} {} total ", format_size(total)),
+                    format!(" Freespace \u{2014} {} reclaimable ", format_size(total)),
                     app.theme.style_header(),
                 )]
             } else {
