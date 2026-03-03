@@ -1,5 +1,6 @@
 // Shared widget utilities used by both module list and module detail views.
 
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -91,9 +92,67 @@ pub fn checkbox_str(state: &CheckState) -> &'static str {
     }
 }
 
+/// Normalize Emacs/terminal-style Ctrl keybindings to standard arrow keys.
+///
+/// Ctrl+N -> Down, Ctrl+P -> Up, Ctrl+F -> Right, Ctrl+B -> Left.
+/// All other keys pass through unchanged.
+pub fn normalize_emacs_key(code: KeyCode, modifiers: KeyModifiers) -> KeyCode {
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        match code {
+            KeyCode::Char('n') => KeyCode::Down,
+            KeyCode::Char('p') => KeyCode::Up,
+            KeyCode::Char('f') => KeyCode::Right,
+            KeyCode::Char('b') => KeyCode::Left,
+            _ => code,
+        }
+    } else {
+        code
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_ctrl_n_to_down() {
+        assert_eq!(
+            normalize_emacs_key(KeyCode::Char('n'), KeyModifiers::CONTROL),
+            KeyCode::Down
+        );
+    }
+
+    #[test]
+    fn normalize_ctrl_p_to_up() {
+        assert_eq!(
+            normalize_emacs_key(KeyCode::Char('p'), KeyModifiers::CONTROL),
+            KeyCode::Up
+        );
+    }
+
+    #[test]
+    fn normalize_ctrl_f_to_right() {
+        assert_eq!(
+            normalize_emacs_key(KeyCode::Char('f'), KeyModifiers::CONTROL),
+            KeyCode::Right
+        );
+    }
+
+    #[test]
+    fn normalize_ctrl_b_to_left() {
+        assert_eq!(
+            normalize_emacs_key(KeyCode::Char('b'), KeyModifiers::CONTROL),
+            KeyCode::Left
+        );
+    }
+
+    #[test]
+    fn normalize_passthrough_no_modifier() {
+        assert_eq!(
+            normalize_emacs_key(KeyCode::Char('n'), KeyModifiers::NONE),
+            KeyCode::Char('n')
+        );
+    }
 
     #[test]
     fn module_icon_xcode() {

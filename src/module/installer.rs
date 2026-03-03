@@ -263,21 +263,7 @@ fn modules_available_names(source_dir: &Path) -> String {
 
 /// Show an interactive multi-select prompt for choosing modules to install.
 fn prompt_module_selection(modules: &[(String, Module)]) -> Result<Vec<usize>, InstallError> {
-    let items: Vec<String> = modules.iter().map(|(_, m)| m.name.clone()).collect();
-
-    let defaults: Vec<bool> = vec![true; items.len()];
-
-    let selections = dialoguer::MultiSelect::new()
-        .with_prompt("Select modules to install")
-        .items(&items)
-        .defaults(&defaults)
-        .interact_opt()
-        .map_err(|e| InstallError::Other(anyhow::anyhow!("prompt error: {}", e)))?;
-
-    match selections {
-        Some(s) => Ok(s),
-        None => Err(InstallError::Cancelled),
-    }
+    crate::tui::views::install_select::run_install_select(modules)
 }
 
 /// Check that git is available on the system.
