@@ -33,11 +33,19 @@ pub fn collect_selected_items(app: &App) -> Vec<(String, String, Option<u64>)> {
     // Include drill-in selections not found in module items
     for path in &app.selected_items {
         if !seen.contains(path) {
+            // Search drill_stack for this item's size
+            let mut found_size = None;
+            for level in &app.drill_stack {
+                if let Some(item) = level.items.iter().find(|i| &i.path == path) {
+                    found_size = item.size;
+                    break;
+                }
+            }
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| path.display().to_string());
-            items.push((name, path.display().to_string(), None));
+            items.push((name, path.display().to_string(), found_size));
         }
     }
 
