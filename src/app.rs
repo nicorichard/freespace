@@ -1,6 +1,6 @@
 // Application state and event loop.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -663,7 +663,6 @@ impl App {
             // c: cleanup
             KeyCode::Char('c') => {
                 if !self.selected_items.is_empty() {
-                    self.drill_stack.clear();
                     self.previous_view = self.current_view;
                     self.current_view = View::CleanupConfirm;
                     self.selected_index = 0;
@@ -805,8 +804,30 @@ impl App {
         // Remove successfully deleted items from module state
         let succeeded: HashSet<PathBuf> = result.succeeded.into_iter().collect();
 
+        // Collect drill item sizes before clearing drill_stack
+        let drill_item_sizes: HashMap<PathBuf, u64> = self
+            .drill_stack
+            .iter()
+            .flat_map(|level| level.items.iter())
+            .filter_map(|item| item.size.map(|s| (item.path.clone(), s)))
+            .collect();
+
         for ms in &mut self.modules {
             ms.items.retain(|item| !succeeded.contains(&item.path));
+
+            // Update parent module items for deleted drill children
+            for item in &mut ms.items {
+                for deleted_path in &succeeded {
+                    if deleted_path.starts_with(&item.path) && deleted_path != &item.path {
+                        if let (Some(parent_size), Some(child_size)) =
+                            (item.size, drill_item_sizes.get(deleted_path))
+                        {
+                            item.size = Some(parent_size.saturating_sub(*child_size));
+                        }
+                    }
+                }
+            }
+
             // Recalculate total size from remaining items
             let total: u64 = ms.items.iter().filter_map(|i| i.size).sum();
             ms.total_size = if ms.items.is_empty() {
@@ -816,7 +837,8 @@ impl App {
             };
         }
 
-        // Clear selected items
+        // Clear drill stack and selected items
+        self.drill_stack.clear();
         self.selected_items.clear();
 
         // Refresh disk stats after cleanup
