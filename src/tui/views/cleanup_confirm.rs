@@ -35,24 +35,10 @@ pub fn collect_selected_items(app: &App) -> Vec<(String, String, Option<u64>, Sa
     // Include drill-in selections not found in module items
     for path in &app.selected_items {
         if !seen.contains(path) {
-            // Try drill_stack first, then the persistent selection cache
-            let mut found_size = None;
-            let mut found_safety = SafetyLevel::Safe;
-            let mut found = false;
-            for level in &app.drill_stack {
-                if let Some(item) = level.items.iter().find(|i| &i.path == path) {
-                    found_size = item.size;
-                    found_safety = item.safety_level;
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                if let Some(&(size, safety)) = app.drill_selection_cache.get(path) {
-                    found_size = size;
-                    found_safety = safety;
-                }
-            }
+            let (found_size, found_safety) = app
+                .drill
+                .lookup_meta(path)
+                .unwrap_or((None, SafetyLevel::Safe));
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())

@@ -49,8 +49,8 @@ pub struct App {
     pub info_confirm_remove: bool,
     /// Deferred editor launch: set to a path to open in $EDITOR after key handling.
     pub pending_editor: Option<PathBuf>,
-    /// Stack of drill-in levels for directory exploration.
-    pub drill_stack: Vec<DrillLevel>,
+    /// Drill-in state for directory exploration.
+    pub drill: DrillState,
     /// Saved selected_index for the module list so we can restore it on back navigation.
     pub module_list_index: usize,
     /// Total disk capacity in bytes (root filesystem).
@@ -71,8 +71,6 @@ pub struct App {
     pub flash_ticks: usize,
     /// Paths blocked by safety rules during scanning (path, reason, module id, module name).
     blocked_paths: Vec<(PathBuf, String, String, String)>,
-    /// Cached metadata for drill-in selections so size/safety survives drill stack pops.
-    pub drill_selection_cache: HashMap<PathBuf, (Option<u64>, safety::SafetyLevel)>,
 }
 
 impl App {
@@ -117,7 +115,7 @@ impl App {
             tick_count: 0,
             info_confirm_remove: false,
             pending_editor: None,
-            drill_stack: Vec::new(),
+            drill: DrillState::new(),
             module_list_index: 0,
             disk_total,
             disk_free,
@@ -128,7 +126,6 @@ impl App {
             flash_message: None,
             flash_ticks: 0,
             blocked_paths: Vec::new(),
-            drill_selection_cache: HashMap::new(),
         }
     }
 
@@ -313,16 +310,7 @@ impl App {
                     item_index,
                     size,
                 } => {
-                    // Update drill item size if the drill level still matches
-                    if let Some(level) = self.drill_stack.get_mut(drill_depth) {
-                        if let Some(item) = level.items.get_mut(item_index) {
-                            item.size = Some(size);
-                            // Keep the selection cache in sync if this item is selected
-                            if let Some(cached) = self.drill_selection_cache.get_mut(&item.path) {
-                                cached.0 = Some(size);
-                            }
-                        }
-                    }
+                    self.drill.update_item_size(drill_depth, item_index, size);
                 }
                 ScanMessage::ScanComplete => {
                     self.scan_status = ScanStatus::Complete;
@@ -334,11 +322,7 @@ impl App {
     /// Return the items for the current detail view level.
     /// If drilled in, returns the drill level's items; otherwise the module's items.
     pub fn current_detail_items(&self, module_idx: usize) -> &[Item] {
-        if let Some(level) = self.drill_stack.last() {
-            &level.items
-        } else {
-            &self.modules[module_idx].items
-        }
+        self.drill.items_or(&self.modules[module_idx].items)
     }
 
     /// List directory children as Items (instant, sizes are None).
@@ -397,11 +381,7 @@ impl App {
     /// Spawn a background task to calculate sizes for drill-in items.
     fn spawn_drill_size_scan(&self, drill_depth: usize) {
         let tx = self.scan_tx.clone();
-        let items: Vec<PathBuf> = self.drill_stack[drill_depth]
-            .items
-            .iter()
-            .map(|i| i.path.clone())
-            .collect();
+        let items = self.drill.scan_paths_at_depth(drill_depth);
         tokio::task::spawn_blocking(move || {
             for (item_index, path) in items.iter().enumerate() {
                 let size = scanner::calculate_size(path);
@@ -685,9 +665,9 @@ impl App {
                         // Selecting parent: prune any already-selected children
                         self.selected_items.retain(|p| !p.starts_with(&path));
                         self.selected_items.insert(path.clone());
-                        self.drill_selection_cache.insert(path, meta);
+                        self.drill.cache_selection(path, meta);
                     } else {
-                        self.drill_selection_cache.remove(&path);
+                        self.drill.uncache_selection(&path);
                     }
                 }
             }
@@ -701,7 +681,7 @@ impl App {
                 for (path, size, safety) in snapshot {
                     self.selected_items.retain(|p| !p.starts_with(&path));
                     self.selected_items.insert(path.clone());
-                    self.drill_selection_cache.insert(path, (size, safety));
+                    self.drill.cache_selection(path, (size, safety));
                 }
             }
             // Deselect all visible items
@@ -713,7 +693,7 @@ impl App {
                     .collect();
                 for path in paths {
                     self.selected_items.remove(&path);
-                    self.drill_selection_cache.remove(&path);
+                    self.drill.uncache_selection(&path);
                 }
             }
             // Enter: drill into directory, or cleanup if at top level
@@ -728,14 +708,10 @@ impl App {
                             self.enforce_scope,
                         );
                         let parent_selected_index = self.selected_index;
-                        self.drill_stack.push(DrillLevel {
-                            path,
-                            items: children,
-                            parent_selected_index,
-                        });
+                        self.drill.push(path, children, parent_selected_index);
                         self.clear_filter();
                         self.selected_index = 0;
-                        let depth = self.drill_stack.len() - 1;
+                        let depth = self.drill.depth() - 1;
                         self.spawn_drill_size_scan(depth);
                     }
                 }
@@ -772,8 +748,8 @@ impl App {
                 if !self.filter_query.is_empty() {
                     self.clear_filter();
                     self.selected_index = 0;
-                } else if let Some(level) = self.drill_stack.pop() {
-                    self.selected_index = level.parent_selected_index;
+                } else if let Some(parent_idx) = self.drill.pop() {
+                    self.selected_index = parent_idx;
                     self.clear_filter();
                 } else {
                     self.clear_filter();
@@ -783,8 +759,8 @@ impl App {
             }
             // Backspace: pop drill stack if drilled in, else go back to module list
             KeyCode::Backspace => {
-                if let Some(level) = self.drill_stack.pop() {
-                    self.selected_index = level.parent_selected_index;
+                if let Some(parent_idx) = self.drill.pop() {
+                    self.selected_index = parent_idx;
                     self.clear_filter();
                 } else {
                     self.clear_filter();
@@ -885,13 +861,8 @@ impl App {
         // Remove successfully deleted items from module state
         let succeeded: HashSet<PathBuf> = result.succeeded.into_iter().collect();
 
-        // Collect drill item sizes before clearing drill_stack
-        let drill_item_sizes: HashMap<PathBuf, u64> = self
-            .drill_stack
-            .iter()
-            .flat_map(|level| level.items.iter())
-            .filter_map(|item| item.size.map(|s| (item.path.clone(), s)))
-            .collect();
+        // Collect drill item sizes before clearing drill state
+        let drill_item_sizes = self.drill.collect_item_sizes();
 
         for ms in &mut self.modules {
             ms.items.retain(|item| !succeeded.contains(&item.path));
@@ -941,10 +912,9 @@ impl App {
             );
         }
 
-        // Clear drill stack and selected items
-        self.drill_stack.clear();
+        // Clear drill state and selected items
+        self.drill.clear();
         self.selected_items.clear();
-        self.drill_selection_cache.clear();
 
         // Refresh disk stats after cleanup
         self.refresh_disk_stats();
@@ -1085,7 +1055,7 @@ impl App {
             tick_count: 0,
             info_confirm_remove: false,
             pending_editor: None,
-            drill_stack: Vec::new(),
+            drill: DrillState::new(),
             module_list_index: 0,
             disk_total: None,
             disk_free: None,
@@ -1096,7 +1066,6 @@ impl App {
             flash_message: None,
             flash_ticks: 0,
             blocked_paths: Vec::new(),
-            drill_selection_cache: HashMap::new(),
         }
     }
 }
@@ -1187,6 +1156,125 @@ pub struct DrillLevel {
     pub path: PathBuf,
     pub items: Vec<Item>,
     pub parent_selected_index: usize,
+}
+
+/// Encapsulates drill-in state (stack + selection cache) and enforces invariants.
+#[derive(Default)]
+pub struct DrillState {
+    stack: Vec<DrillLevel>,
+    selection_cache: HashMap<PathBuf, (Option<u64>, safety::SafetyLevel)>,
+}
+
+impl DrillState {
+    /// Create empty drill state.
+    pub fn new() -> Self {
+        Self {
+            stack: Vec::new(),
+            selection_cache: HashMap::new(),
+        }
+    }
+
+    /// Whether the user is currently drilled into a directory.
+    pub fn is_active(&self) -> bool {
+        !self.stack.is_empty()
+    }
+
+    /// Number of drill levels deep.
+    pub fn depth(&self) -> usize {
+        self.stack.len()
+    }
+
+    /// Return current drill items if active, otherwise the fallback slice.
+    pub fn items_or<'a>(&'a self, fallback: &'a [Item]) -> &'a [Item] {
+        if let Some(level) = self.stack.last() {
+            &level.items
+        } else {
+            fallback
+        }
+    }
+
+    /// Push a new drill level (enter a directory).
+    pub fn push(&mut self, path: PathBuf, items: Vec<Item>, parent_selected_index: usize) {
+        self.stack.push(DrillLevel {
+            path,
+            items,
+            parent_selected_index,
+        });
+    }
+
+    /// Pop the current drill level, returning the parent's selected index.
+    pub fn pop(&mut self) -> Option<usize> {
+        self.stack.pop().map(|level| level.parent_selected_index)
+    }
+
+    /// Update a drill item's size (from a `DrillItemSized` message) and sync the selection cache.
+    pub fn update_item_size(&mut self, depth: usize, item_index: usize, size: u64) {
+        if let Some(level) = self.stack.get_mut(depth) {
+            if let Some(item) = level.items.get_mut(item_index) {
+                item.size = Some(size);
+                if let Some(cached) = self.selection_cache.get_mut(&item.path) {
+                    cached.0 = Some(size);
+                }
+            }
+        }
+    }
+
+    /// Cache metadata for a selected drill item so size/safety survives stack pops.
+    pub fn cache_selection(&mut self, path: PathBuf, meta: (Option<u64>, safety::SafetyLevel)) {
+        self.selection_cache.insert(path, meta);
+    }
+
+    /// Remove cached metadata for a deselected drill item.
+    pub fn uncache_selection(&mut self, path: &Path) {
+        self.selection_cache.remove(path);
+    }
+
+    /// Look up size and safety for a path: checks stack first, then cache.
+    pub fn lookup_meta(&self, path: &Path) -> Option<(Option<u64>, safety::SafetyLevel)> {
+        for level in &self.stack {
+            if let Some(item) = level.items.iter().find(|i| i.path == path) {
+                return Some((item.size, item.safety_level));
+            }
+        }
+        self.selection_cache.get(path).copied()
+    }
+
+    /// Collect all drill item sizes into a map (for parent size adjustment during cleanup).
+    pub fn collect_item_sizes(&self) -> HashMap<PathBuf, u64> {
+        self.stack
+            .iter()
+            .flat_map(|level| level.items.iter())
+            .filter_map(|item| item.size.map(|s| (item.path.clone(), s)))
+            .collect()
+    }
+
+    /// Return breadcrumb directory names from the drill stack.
+    pub fn breadcrumb_parts(&self) -> Vec<String> {
+        self.stack
+            .iter()
+            .map(|level| {
+                level
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| level.path.display().to_string())
+            })
+            .collect()
+    }
+
+    /// Return paths at the given drill depth for background size scanning.
+    pub fn scan_paths_at_depth(&self, depth: usize) -> Vec<PathBuf> {
+        self.stack
+            .get(depth)
+            .map(|level| level.items.iter().map(|i| i.path.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Reset all drill state.
+    pub fn clear(&mut self) {
+        self.stack.clear();
+        self.selection_cache.clear();
+    }
 }
 
 /// Case-insensitive substring match for filtering lists.
@@ -1551,5 +1639,163 @@ mod tests {
         for w in sizes.windows(2) {
             assert!(w[0] >= w[1]);
         }
+    }
+
+    // --- DrillState ---
+
+    #[test]
+    fn drill_state_push_pop_restores_index() {
+        let mut ds = DrillState::new();
+        assert!(!ds.is_active());
+        ds.push(PathBuf::from("/a"), vec![], 5);
+        assert!(ds.is_active());
+        assert_eq!(ds.depth(), 1);
+        let idx = ds.pop();
+        assert_eq!(idx, Some(5));
+        assert!(!ds.is_active());
+    }
+
+    #[test]
+    fn drill_state_items_or_fallback() {
+        let ds = DrillState::new();
+        let fallback = vec![Item {
+            name: "x".into(),
+            path: PathBuf::from("/x"),
+            size: Some(1),
+            item_type: ItemType::File,
+            target_description: None,
+            safety_level: crate::core::safety::SafetyLevel::Safe,
+        }];
+        assert_eq!(ds.items_or(&fallback).len(), 1);
+    }
+
+    #[test]
+    fn drill_state_items_or_drill() {
+        let mut ds = DrillState::new();
+        let drill_items = vec![
+            Item {
+                name: "a".into(),
+                path: PathBuf::from("/a"),
+                size: None,
+                item_type: ItemType::File,
+                target_description: None,
+                safety_level: crate::core::safety::SafetyLevel::Safe,
+            },
+            Item {
+                name: "b".into(),
+                path: PathBuf::from("/b"),
+                size: None,
+                item_type: ItemType::File,
+                target_description: None,
+                safety_level: crate::core::safety::SafetyLevel::Safe,
+            },
+        ];
+        ds.push(PathBuf::from("/dir"), drill_items, 0);
+        let fallback: Vec<Item> = vec![];
+        assert_eq!(ds.items_or(&fallback).len(), 2);
+    }
+
+    #[test]
+    fn drill_state_update_item_size_syncs_cache() {
+        let mut ds = DrillState::new();
+        let items = vec![Item {
+            name: "f".into(),
+            path: PathBuf::from("/f"),
+            size: None,
+            item_type: ItemType::File,
+            target_description: None,
+            safety_level: crate::core::safety::SafetyLevel::Safe,
+        }];
+        ds.push(PathBuf::from("/dir"), items, 0);
+        ds.cache_selection(
+            PathBuf::from("/f"),
+            (None, crate::core::safety::SafetyLevel::Safe),
+        );
+        ds.update_item_size(0, 0, 42);
+        let meta = ds.lookup_meta(Path::new("/f")).unwrap();
+        assert_eq!(meta.0, Some(42));
+    }
+
+    #[test]
+    fn drill_state_cache_uncache() {
+        let mut ds = DrillState::new();
+        ds.cache_selection(
+            PathBuf::from("/x"),
+            (Some(10), crate::core::safety::SafetyLevel::Warn),
+        );
+        assert!(ds.lookup_meta(Path::new("/x")).is_some());
+        ds.uncache_selection(Path::new("/x"));
+        assert!(ds.lookup_meta(Path::new("/x")).is_none());
+    }
+
+    #[test]
+    fn drill_state_clear_resets() {
+        let mut ds = DrillState::new();
+        ds.push(PathBuf::from("/a"), vec![], 0);
+        ds.cache_selection(
+            PathBuf::from("/x"),
+            (Some(1), crate::core::safety::SafetyLevel::Safe),
+        );
+        ds.clear();
+        assert!(!ds.is_active());
+        assert!(ds.lookup_meta(Path::new("/x")).is_none());
+    }
+
+    #[test]
+    fn drill_state_lookup_meta_stack_first() {
+        let mut ds = DrillState::new();
+        let items = vec![Item {
+            name: "f".into(),
+            path: PathBuf::from("/f"),
+            size: Some(100),
+            item_type: ItemType::File,
+            target_description: None,
+            safety_level: crate::core::safety::SafetyLevel::Safe,
+        }];
+        ds.push(PathBuf::from("/dir"), items, 0);
+        // Cache has a different value — stack should win
+        ds.cache_selection(
+            PathBuf::from("/f"),
+            (Some(999), crate::core::safety::SafetyLevel::Warn),
+        );
+        let meta = ds.lookup_meta(Path::new("/f")).unwrap();
+        assert_eq!(meta.0, Some(100));
+        assert_eq!(meta.1, crate::core::safety::SafetyLevel::Safe);
+    }
+
+    #[test]
+    fn drill_state_breadcrumb_parts() {
+        let mut ds = DrillState::new();
+        ds.push(PathBuf::from("/a/dir1"), vec![], 0);
+        ds.push(PathBuf::from("/a/dir1/sub"), vec![], 0);
+        let parts = ds.breadcrumb_parts();
+        assert_eq!(parts, vec!["dir1", "sub"]);
+    }
+
+    #[test]
+    fn drill_state_collect_item_sizes() {
+        let mut ds = DrillState::new();
+        let items = vec![
+            Item {
+                name: "a".into(),
+                path: PathBuf::from("/a"),
+                size: Some(10),
+                item_type: ItemType::File,
+                target_description: None,
+                safety_level: crate::core::safety::SafetyLevel::Safe,
+            },
+            Item {
+                name: "b".into(),
+                path: PathBuf::from("/b"),
+                size: None,
+                item_type: ItemType::File,
+                target_description: None,
+                safety_level: crate::core::safety::SafetyLevel::Safe,
+            },
+        ];
+        ds.push(PathBuf::from("/dir"), items, 0);
+        let sizes = ds.collect_item_sizes();
+        assert_eq!(sizes.len(), 1);
+        assert_eq!(sizes[&PathBuf::from("/a")], 10);
     }
 }
