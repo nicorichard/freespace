@@ -993,6 +993,7 @@ impl App {
 
 /// Query total and free disk space for the root filesystem.
 #[cfg(unix)]
+#[allow(clippy::unnecessary_cast)]
 fn disk_stats() -> Option<(u64, u64)> {
     use std::ffi::CString;
     let path = CString::new("/").ok()?;
