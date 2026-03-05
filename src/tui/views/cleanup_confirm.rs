@@ -328,6 +328,7 @@ mod tests {
                     item_type: ItemType::Directory,
                     target_description: None,
                     safety_level: crate::core::safety::SafetyLevel::Safe,
+                    is_shared: false,
                 },
                 Item {
                     name: "small".to_string(),
@@ -336,6 +337,7 @@ mod tests {
                     item_type: ItemType::File,
                     target_description: None,
                     safety_level: crate::core::safety::SafetyLevel::Safe,
+                    is_shared: false,
                 },
             ],
             total_size: Some(5_000_001_000),

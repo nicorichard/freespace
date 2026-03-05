@@ -71,6 +71,10 @@ pub struct App {
     pub flash_ticks: usize,
     /// Paths blocked by safety rules during scanning (path, reason, module id, module name).
     blocked_paths: Vec<(PathBuf, String, String, String)>,
+    /// Canonical paths already counted toward the deduped total.
+    seen_paths: HashSet<PathBuf>,
+    /// Accurate global total counting each unique path once across modules.
+    pub deduped_total: u64,
 }
 
 impl App {
@@ -126,6 +130,8 @@ impl App {
             flash_message: None,
             flash_ticks: 0,
             blocked_paths: Vec::new(),
+            seen_paths: HashSet::new(),
+            deduped_total: 0,
         }
     }
 
@@ -281,10 +287,26 @@ impl App {
                     size,
                 } => {
                     if let Some(ms) = self.modules.get_mut(module_index) {
+                        let canonical = ms.items.get(item_index).map(|item| {
+                            item.path
+                                .canonicalize()
+                                .unwrap_or_else(|_| item.path.clone())
+                        });
+                        let is_new = canonical
+                            .as_ref()
+                            .map(|c| self.seen_paths.insert(c.clone()))
+                            .unwrap_or(true);
+
                         if let Some(item) = ms.items.get_mut(item_index) {
                             item.size = Some(size);
+                            if !is_new {
+                                item.is_shared = true;
+                            }
                         }
-                        // Incrementally update total_size
+                        if is_new {
+                            self.deduped_total += size;
+                        }
+                        // Per-module total stays as-is (honest per-module size)
                         ms.total_size = Some(ms.total_size.unwrap_or(0) + size);
                     }
                 }
@@ -357,6 +379,7 @@ impl App {
                     item_type,
                     target_description: None,
                     safety_level: level,
+                    is_shared: false,
                 });
             }
         }
@@ -437,6 +460,7 @@ impl App {
                 let idx = *idx;
                 self.handle_key_info(key, idx);
             }
+            View::FlatView => self.handle_key_flat_view(key),
         }
     }
 
@@ -503,32 +527,6 @@ impl App {
                     } else {
                         self.selected_index - 1
                     };
-                }
-            }
-            // Jump to next section (Global -> Local)
-            KeyCode::Char('l') | KeyCode::Right => {
-                if count > 0 {
-                    let first_local = sorted
-                        .iter()
-                        .position(|&idx| !views::module_list::is_global(self, idx));
-                    if let Some(pos) = first_local {
-                        if self.selected_index < pos {
-                            self.selected_index = pos;
-                        }
-                    }
-                }
-            }
-            // Jump to previous section (Local -> Global)
-            KeyCode::Char('h') | KeyCode::Left => {
-                if count > 0 {
-                    let first_local = sorted
-                        .iter()
-                        .position(|&idx| !views::module_list::is_global(self, idx));
-                    if let Some(pos) = first_local {
-                        if self.selected_index >= pos {
-                            self.selected_index = 0;
-                        }
-                    }
                 }
             }
             // Enter detail view for selected module
@@ -614,6 +612,13 @@ impl App {
                     self.current_view = View::Info(module_idx);
                 }
             }
+            // Switch to flat view
+            KeyCode::Tab => {
+                self.module_list_index = self.selected_index;
+                self.clear_filter();
+                self.current_view = View::FlatView;
+                self.selected_index = 0;
+            }
             // Esc: clear filter
             KeyCode::Esc => {
                 if !self.filter_query.is_empty() {
@@ -635,8 +640,9 @@ impl App {
             return;
         }
 
-        let sorted = views::module_detail::sorted_item_indices(self, module_idx);
-        let count = sorted.len();
+        let (display_order, group_boundaries) =
+            views::module_detail::display_order_item_indices(self, module_idx);
+        let count = display_order.len();
 
         match key {
             // Navigate down
@@ -655,9 +661,38 @@ impl App {
                     };
                 }
             }
+            // Jump to next target group
+            KeyCode::Char('l') | KeyCode::Right => {
+                if !group_boundaries.is_empty() {
+                    // Find the next group boundary after current position
+                    if let Some(&next) = group_boundaries.iter().find(|&&b| b > self.selected_index)
+                    {
+                        self.selected_index = next;
+                    }
+                }
+            }
+            // Jump to previous target group
+            KeyCode::Char('h') | KeyCode::Left => {
+                if !group_boundaries.is_empty() {
+                    // Find the group boundary at or before current position,
+                    // then jump to the one before that (or stay if at first group)
+                    let current_group = group_boundaries
+                        .iter()
+                        .rposition(|&b| b <= self.selected_index);
+                    if let Some(gi) = current_group {
+                        if self.selected_index > group_boundaries[gi] {
+                            // Not at start of current group — jump to its start
+                            self.selected_index = group_boundaries[gi];
+                        } else if gi > 0 {
+                            // At start of current group — jump to previous group
+                            self.selected_index = group_boundaries[gi - 1];
+                        }
+                    }
+                }
+            }
             // Toggle selection on highlighted item
             KeyCode::Char(' ') => {
-                if let Some(&item_idx) = sorted.get(self.selected_index) {
+                if let Some(&item_idx) = display_order.get(self.selected_index) {
                     let items = self.current_detail_items(module_idx);
                     let path = items[item_idx].path.clone();
                     let meta = (items[item_idx].size, items[item_idx].safety_level);
@@ -698,7 +733,7 @@ impl App {
             }
             // Enter: drill into directory, or cleanup if at top level
             KeyCode::Enter => {
-                if let Some(&item_idx) = sorted.get(self.selected_index) {
+                if let Some(&item_idx) = display_order.get(self.selected_index) {
                     let items = self.current_detail_items(module_idx);
                     if matches!(items[item_idx].item_type, ItemType::Directory) {
                         let path = items[item_idx].path.clone();
@@ -726,7 +761,7 @@ impl App {
             }
             // Open in file manager
             KeyCode::Char('o') => {
-                if let Some(&item_idx) = sorted.get(self.selected_index) {
+                if let Some(&item_idx) = display_order.get(self.selected_index) {
                     let items = self.current_detail_items(module_idx);
                     Self::open_in_file_manager(&items[item_idx].path);
                 }
@@ -772,6 +807,118 @@ impl App {
             KeyCode::Char('?') => {
                 self.previous_view = self.current_view;
                 self.current_view = View::Help;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_key_flat_view(&mut self, key: KeyCode) {
+        let sorted = views::flat_view::sorted_flat_items(self);
+        let count = sorted.len();
+
+        match key {
+            // Navigate
+            KeyCode::Char('j') | KeyCode::Down => {
+                if count > 0 {
+                    self.selected_index = (self.selected_index + 1) % count;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if count > 0 {
+                    self.selected_index = if self.selected_index == 0 {
+                        count - 1
+                    } else {
+                        self.selected_index - 1
+                    };
+                }
+            }
+            // Toggle selection
+            KeyCode::Char(' ') => {
+                if let Some(&(module_idx, item_idx)) = sorted.get(self.selected_index) {
+                    let path = self.modules[module_idx].items[item_idx].path.clone();
+                    if !self.selected_items.remove(&path) {
+                        self.selected_items.retain(|p| !p.starts_with(&path));
+                        self.selected_items.insert(path);
+                    }
+                }
+            }
+            // Select all visible items
+            KeyCode::Char('a') => {
+                for &(module_idx, item_idx) in &sorted {
+                    let path = self.modules[module_idx].items[item_idx].path.clone();
+                    self.selected_items.retain(|p| !p.starts_with(&path));
+                    self.selected_items.insert(path);
+                }
+            }
+            // Deselect all visible items
+            KeyCode::Char('n') => {
+                for &(module_idx, item_idx) in &sorted {
+                    let path = self.modules[module_idx].items[item_idx].path.clone();
+                    self.selected_items.remove(&path);
+                }
+            }
+            // Enter: drill into directory
+            KeyCode::Enter => {
+                if let Some(&(module_idx, item_idx)) = sorted.get(self.selected_index) {
+                    let item = &self.modules[module_idx].items[item_idx];
+                    if matches!(item.item_type, ItemType::Directory) {
+                        let path = item.path.clone();
+                        let children = Self::enumerate_directory(
+                            &path,
+                            &self.protected_paths,
+                            self.enforce_scope,
+                        );
+                        self.drill.push(path, children, 0);
+                        self.current_view = View::ModuleDetail(module_idx);
+                        self.clear_filter();
+                        self.selected_index = 0;
+                        let depth = self.drill.depth() - 1;
+                        self.spawn_drill_size_scan(depth);
+                    }
+                }
+            }
+            // Cleanup
+            KeyCode::Char('c') => {
+                if !self.selected_items.is_empty() {
+                    self.previous_view = self.current_view;
+                    self.current_view = View::CleanupConfirm;
+                    self.selected_index = 0;
+                }
+            }
+            // Open in file manager
+            KeyCode::Char('o') => {
+                if let Some(&(module_idx, item_idx)) = sorted.get(self.selected_index) {
+                    Self::open_in_file_manager(&self.modules[module_idx].items[item_idx].path);
+                }
+            }
+            // Filter
+            KeyCode::Char('/') => {
+                self.filter_active = true;
+                self.filter_query.clear();
+                self.filter_cursor = 0;
+                self.selected_index = 0;
+            }
+            // Help
+            KeyCode::Char('?') => {
+                self.previous_view = self.current_view;
+                self.current_view = View::Help;
+            }
+            // Tab: switch back to module list
+            KeyCode::Tab => {
+                self.clear_filter();
+                self.current_view = View::ModuleList;
+                self.selected_index = self.module_list_index;
+            }
+            // Esc: clear filter or go back to module list
+            KeyCode::Esc => {
+                if !self.filter_query.is_empty() {
+                    self.clear_filter();
+                    self.selected_index = 0;
+                } else {
+                    self.clear_filter();
+                    self.current_view = View::ModuleList;
+                    self.selected_index = self.module_list_index;
+                }
             }
             _ => {}
         }
@@ -912,12 +1059,37 @@ impl App {
             );
         }
 
+        // Recalculate deduped_total and seen_paths from scratch
+        self.recalculate_dedup();
+
         // Clear drill state and selected items
         self.drill.clear();
         self.selected_items.clear();
 
         // Refresh disk stats after cleanup
         self.refresh_disk_stats();
+    }
+
+    /// Recalculate dedup state from all module items (e.g. after cleanup).
+    fn recalculate_dedup(&mut self) {
+        self.seen_paths.clear();
+        self.deduped_total = 0;
+        for ms in &mut self.modules {
+            for item in &mut ms.items {
+                if let Some(size) = item.size {
+                    let canonical = item
+                        .path
+                        .canonicalize()
+                        .unwrap_or_else(|_| item.path.clone());
+                    if self.seen_paths.insert(canonical) {
+                        self.deduped_total += size;
+                        item.is_shared = false;
+                    } else {
+                        item.is_shared = true;
+                    }
+                }
+            }
+        }
     }
 
     /// Re-query disk stats and update fields.
@@ -1009,6 +1181,7 @@ impl App {
             View::CleanupConfirm => self.render_cleanup_confirm(frame),
             View::Help => self.render_help(frame),
             View::Info(idx) => self.render_info(frame, *idx),
+            View::FlatView => self.render_flat_view(frame),
         }
     }
 
@@ -1032,6 +1205,10 @@ impl App {
 
     fn render_info(&self, frame: &mut ratatui::Frame, module_idx: usize) {
         views::info::render(self, frame, module_idx);
+    }
+
+    fn render_flat_view(&self, frame: &mut ratatui::Frame) {
+        views::flat_view::render(self, frame);
     }
 
     /// Build an App with controlled state for testing (no scanning, no config).
@@ -1066,6 +1243,8 @@ impl App {
             flash_message: None,
             flash_ticks: 0,
             blocked_paths: Vec::new(),
+            seen_paths: HashSet::new(),
+            deduped_total: 0,
         }
     }
 }
@@ -1107,6 +1286,7 @@ pub enum View {
     CleanupConfirm,
     Help,
     Info(usize),
+    FlatView,
 }
 
 /// State for a single loaded module including its discovered items.
@@ -1143,6 +1323,8 @@ pub struct Item {
     pub item_type: ItemType,
     pub target_description: Option<String>,
     pub safety_level: crate::core::safety::SafetyLevel,
+    /// Whether this item's path is also claimed by another module.
+    pub is_shared: bool,
 }
 
 /// The type of a discovered filesystem item.
@@ -1313,6 +1495,7 @@ mod tests {
                 item_type: ItemType::Directory,
                 target_description: None,
                 safety_level: crate::core::safety::SafetyLevel::Safe,
+                is_shared: false,
             })
             .collect();
         ModuleState {
@@ -1665,6 +1848,7 @@ mod tests {
             item_type: ItemType::File,
             target_description: None,
             safety_level: crate::core::safety::SafetyLevel::Safe,
+            is_shared: false,
         }];
         assert_eq!(ds.items_or(&fallback).len(), 1);
     }
@@ -1680,6 +1864,7 @@ mod tests {
                 item_type: ItemType::File,
                 target_description: None,
                 safety_level: crate::core::safety::SafetyLevel::Safe,
+                is_shared: false,
             },
             Item {
                 name: "b".into(),
@@ -1688,6 +1873,7 @@ mod tests {
                 item_type: ItemType::File,
                 target_description: None,
                 safety_level: crate::core::safety::SafetyLevel::Safe,
+                is_shared: false,
             },
         ];
         ds.push(PathBuf::from("/dir"), drill_items, 0);
@@ -1705,6 +1891,7 @@ mod tests {
             item_type: ItemType::File,
             target_description: None,
             safety_level: crate::core::safety::SafetyLevel::Safe,
+            is_shared: false,
         }];
         ds.push(PathBuf::from("/dir"), items, 0);
         ds.cache_selection(
@@ -1751,6 +1938,7 @@ mod tests {
             item_type: ItemType::File,
             target_description: None,
             safety_level: crate::core::safety::SafetyLevel::Safe,
+            is_shared: false,
         }];
         ds.push(PathBuf::from("/dir"), items, 0);
         // Cache has a different value — stack should win
@@ -1783,6 +1971,7 @@ mod tests {
                 item_type: ItemType::File,
                 target_description: None,
                 safety_level: crate::core::safety::SafetyLevel::Safe,
+                is_shared: false,
             },
             Item {
                 name: "b".into(),
@@ -1791,6 +1980,7 @@ mod tests {
                 item_type: ItemType::File,
                 target_description: None,
                 safety_level: crate::core::safety::SafetyLevel::Safe,
+                is_shared: false,
             },
         ];
         ds.push(PathBuf::from("/dir"), items, 0);
