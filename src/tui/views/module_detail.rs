@@ -7,7 +7,7 @@ use ratatui::Frame;
 
 use crate::app::{matches_filter, App, ItemType, ModuleStatus};
 use crate::tui::widgets::{
-    checkbox_str, format_size, format_size_or_placeholder, keybinding_bar, module_icon,
+    checkbox_str, flash_line, format_size, format_size_or_placeholder, keybinding_bar, module_icon,
     render_status_line, CheckState,
 };
 
@@ -165,9 +165,11 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
         .map(|&item_idx| {
             let item = &items[item_idx];
 
-            // Selection checkbox
+            // Selection checkbox — exact match = All, any child selected = Partial
             let check_state = if app.selected_items.contains(&item.path) {
                 CheckState::All
+            } else if app.selected_items.iter().any(|p| p.starts_with(&item.path)) {
+                CheckState::Partial
             } else {
                 CheckState::None
             };
@@ -262,7 +264,9 @@ fn render_path_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) 
 }
 
 fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
-    let line = if app.filter_active {
+    let line = if let Some((ref msg, ref level)) = app.flash_message {
+        flash_line(msg, level, &app.theme)
+    } else if app.filter_active {
         // Active filter input mode
         Line::from(vec![
             Span::styled(" / ", app.theme.style_size()),
@@ -330,6 +334,7 @@ mod tests {
                     size: Some(5_000_000_000),
                     item_type: ItemType::Directory,
                     target_description: None,
+                    safety_level: crate::core::safety::SafetyLevel::Safe,
                 },
                 Item {
                     name: "small-file".to_string(),
@@ -337,6 +342,7 @@ mod tests {
                     size: Some(1_000),
                     item_type: ItemType::File,
                     target_description: None,
+                    safety_level: crate::core::safety::SafetyLevel::Safe,
                 },
             ],
             total_size: Some(5_000_001_000),

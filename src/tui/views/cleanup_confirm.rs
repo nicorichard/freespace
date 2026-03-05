@@ -3,18 +3,19 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
 use crate::app::{matches_filter, App};
+use crate::core::safety::SafetyLevel;
 use crate::tui::widgets::{
     format_size, format_size_or_placeholder, keybinding_bar, render_status_line,
 };
 
-/// Collect selected items across all modules into a flat list of (name, path_display, size).
+/// Collect selected items across all modules into a flat list of (name, path_display, size, safety_level).
 /// Also includes items selected during drill-in that aren't direct module items.
-pub fn collect_selected_items(app: &App) -> Vec<(String, String, Option<u64>)> {
-    let mut items: Vec<(String, String, Option<u64>)> = Vec::new();
+pub fn collect_selected_items(app: &App) -> Vec<(String, String, Option<u64>, SafetyLevel)> {
+    let mut items: Vec<(String, String, Option<u64>, SafetyLevel)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
     for ms in &app.modules {
@@ -25,6 +26,7 @@ pub fn collect_selected_items(app: &App) -> Vec<(String, String, Option<u64>)> {
                     item.name.clone(),
                     item.path.display().to_string(),
                     item.size,
+                    item.safety_level,
                 ));
             }
         }
@@ -33,19 +35,29 @@ pub fn collect_selected_items(app: &App) -> Vec<(String, String, Option<u64>)> {
     // Include drill-in selections not found in module items
     for path in &app.selected_items {
         if !seen.contains(path) {
-            // Search drill_stack for this item's size
+            // Try drill_stack first, then the persistent selection cache
             let mut found_size = None;
+            let mut found_safety = SafetyLevel::Safe;
+            let mut found = false;
             for level in &app.drill_stack {
                 if let Some(item) = level.items.iter().find(|i| &i.path == path) {
                     found_size = item.size;
+                    found_safety = item.safety_level;
+                    found = true;
                     break;
+                }
+            }
+            if !found {
+                if let Some(&(size, safety)) = app.drill_selection_cache.get(path) {
+                    found_size = size;
+                    found_safety = safety;
                 }
             }
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| path.display().to_string());
-            items.push((name, path.display().to_string(), found_size));
+            items.push((name, path.display().to_string(), found_size, found_safety));
         }
     }
 
@@ -68,39 +80,23 @@ pub fn filtered_confirm_item_count(app: &App) -> usize {
     } else {
         items
             .iter()
-            .filter(|(name, _, _)| matches_filter(name, &app.filter_query))
+            .filter(|(name, _, _, _)| matches_filter(name, &app.filter_query))
             .count()
     }
 }
 
-/// Compute a centered rectangle that is at most `max_percent` of the terminal area,
-/// with an absolute cap on width and height.
-fn centered_rect(area: Rect, max_percent: u16) -> Rect {
-    let max_width = area.width * max_percent / 100;
-    let max_height = area.height * max_percent / 100;
-
-    // Ensure minimum usable size
-    let width = max_width.max(40).min(area.width);
-    let height = max_height.max(10).min(area.height);
-
-    let x = (area.width.saturating_sub(width)) / 2;
-    let y = (area.height.saturating_sub(height)) / 2;
-
-    Rect::new(x, y, width, height)
-}
-
-/// Render the cleanup confirmation view as a centered modal dialog.
+/// Render the cleanup confirmation view as a fullscreen view.
 pub fn render(app: &App, frame: &mut Frame) {
-    let area = frame.area();
-    let dialog_area = centered_rect(area, 80);
-
-    // Clear the area behind the dialog
-    frame.render_widget(Clear, dialog_area);
+    let dialog_area = frame.area();
 
     let all_items = collect_selected_items(app);
     let item_count = all_items.len();
     let total_size: u64 = all_items.iter().filter_map(|i| i.2).sum();
     let known_count = all_items.iter().filter(|i| i.2.is_some()).count();
+    let warned_count = all_items
+        .iter()
+        .filter(|i| i.3 == SafetyLevel::Warn)
+        .count();
 
     // Apply filter for display, but keep unfiltered totals for summary
     let filtered_items: Vec<_> = if app.filter_query.is_empty() {
@@ -108,7 +104,7 @@ pub fn render(app: &App, frame: &mut Frame) {
     } else {
         all_items
             .into_iter()
-            .filter(|(name, _, _)| matches_filter(name, &app.filter_query))
+            .filter(|(name, _, _, _)| matches_filter(name, &app.filter_query))
             .collect()
     };
 
@@ -132,6 +128,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         item_count,
         total_size,
         known_count,
+        warned_count,
     );
     render_action_bar(
         app,
@@ -159,7 +156,7 @@ fn render_items_list(
     app: &App,
     frame: &mut Frame,
     area: Rect,
-    items: &[(String, String, Option<u64>)],
+    items: &[(String, String, Option<u64>, SafetyLevel)],
 ) {
     if items.is_empty() {
         let msg = Paragraph::new("No items selected.")
@@ -175,8 +172,14 @@ fn render_items_list(
 
     let rows: Vec<Row> = items
         .iter()
-        .map(|(name, path, size)| {
-            let name_cell = Cell::from(Span::styled(name.as_str(), app.theme.style_normal()));
+        .map(|(name, path, size, safety)| {
+            let is_warned = *safety == SafetyLevel::Warn;
+            let name_style = if is_warned {
+                app.theme.style_warning()
+            } else {
+                app.theme.style_normal()
+            };
+            let name_cell = Cell::from(Span::styled(name.as_str(), name_style));
 
             // Show path (truncated if needed)
             let max_path_len = (area.width as usize).saturating_sub(30);
@@ -195,7 +198,13 @@ fn render_items_list(
                 app.theme.style_size(),
             ));
 
-            Row::new(vec![name_cell, path_cell, size_cell])
+            let safety_cell = if is_warned {
+                Cell::from(Span::styled("[!]", app.theme.style_warning()))
+            } else {
+                Cell::from("")
+            };
+
+            Row::new(vec![name_cell, path_cell, size_cell, safety_cell])
         })
         .collect();
 
@@ -203,6 +212,7 @@ fn render_items_list(
         Constraint::Length(20), // Name
         Constraint::Min(20),    // Path
         Constraint::Length(12), // Size
+        Constraint::Length(10), // Safety
     ];
 
     let table = Table::new(rows, widths)
@@ -227,6 +237,7 @@ fn render_summary(
     item_count: usize,
     total_size: u64,
     known_count: usize,
+    warned_count: usize,
 ) {
     let size_text = format_size(total_size);
     let suffix = if known_count < item_count {
@@ -246,11 +257,22 @@ fn render_summary(
         suffix,
     );
 
-    let summary = Paragraph::new(Line::from(vec![Span::styled(
+    let mut spans = vec![Span::styled(
         summary_text,
         app.theme.style_size().add_modifier(Modifier::BOLD),
-    )]))
-    .block(
+    )];
+    if warned_count > 0 {
+        spans.push(Span::styled(
+            format!(
+                " [!] {} item{} in sensitive location \u{2014} review carefully before proceeding",
+                warned_count,
+                if warned_count == 1 { "" } else { "s" }
+            ),
+            app.theme.style_warning(),
+        ));
+    }
+
+    let summary = Paragraph::new(Line::from(spans)).block(
         Block::default()
             .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
             .border_style(app.theme.style_border()),
@@ -319,6 +341,7 @@ mod tests {
                     size: Some(5_000_000_000),
                     item_type: ItemType::Directory,
                     target_description: None,
+                    safety_level: crate::core::safety::SafetyLevel::Safe,
                 },
                 Item {
                     name: "small".to_string(),
@@ -326,6 +349,7 @@ mod tests {
                     size: Some(1_000),
                     item_type: ItemType::File,
                     target_description: None,
+                    safety_level: crate::core::safety::SafetyLevel::Safe,
                 },
             ],
             total_size: Some(5_000_001_000),
@@ -352,7 +376,7 @@ mod tests {
     fn collect_selected_items_sorted_by_size_desc() {
         let app = make_confirm_app();
         let items = collect_selected_items(&app);
-        // Largest first
+        // Largest first; tuple is (name, path, size, safety_level)
         assert_eq!(items[0].0, "big");
         assert_eq!(items[1].0, "small");
     }

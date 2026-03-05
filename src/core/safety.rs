@@ -2,23 +2,26 @@
 
 use std::path::{Path, PathBuf};
 
+/// Safety classification for a filesystem path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SafetyLevel {
+    /// Path is safe to operate on.
+    Safe,
+    /// Path is in a sensitive location — user should be warned but can proceed.
+    Warn,
+    /// Path is blocked by safety rules — operation must be denied.
+    Deny,
+}
+
 /// Returns platform-specific system paths that must never be deleted.
 fn default_deny_paths() -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = vec![];
 
     #[cfg(target_os = "macos")]
     paths.extend(
-        [
-            "/System",
-            "/usr",
-            "/bin",
-            "/sbin",
-            "/etc",
-            "/Applications",
-            "/Library",
-        ]
-        .iter()
-        .map(PathBuf::from),
+        ["/System", "/usr", "/bin", "/sbin", "/etc"]
+            .iter()
+            .map(PathBuf::from),
     );
 
     #[cfg(target_os = "linux")]
@@ -61,6 +64,16 @@ fn default_deny_paths() -> Vec<PathBuf> {
     paths
 }
 
+/// Returns platform-specific paths that warrant a warning but are not hard-denied.
+fn default_warn_paths() -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = vec![];
+
+    #[cfg(target_os = "macos")]
+    paths.extend(["/Library", "/Applications"].iter().map(PathBuf::from));
+
+    paths
+}
+
 /// Expand `~` prefix to the user's home directory.
 fn expand_user_path(s: &str) -> PathBuf {
     if let Some(rest) = s.strip_prefix("~/") {
@@ -96,6 +109,61 @@ pub fn is_path_denied(path: &Path, extra_deny: &[PathBuf]) -> Option<String> {
     }
 
     None
+}
+
+/// Classify a path's safety level, returning the level and an optional reason string.
+///
+/// Checks (in order):
+/// 1. Deny list (builtins + user extras) → `Deny`
+/// 2. Warn list → `Warn`
+/// 3. Outside `$HOME` when `enforce_scope` is true → `Warn`
+/// 4. Otherwise → `Safe`
+pub fn classify_path(
+    path: &Path,
+    extra_deny: &[PathBuf],
+    enforce_scope: bool,
+) -> (SafetyLevel, Option<String>) {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+    // Root is always denied
+    let root = PathBuf::from("/");
+    if canonical == root {
+        return (SafetyLevel::Deny, Some("/".to_string()));
+    }
+
+    // Check deny list
+    let mut deny = default_deny_paths();
+    deny.extend(extra_deny.iter().cloned());
+
+    for deny_path in &deny {
+        let deny_canonical = deny_path
+            .canonicalize()
+            .unwrap_or_else(|_| deny_path.clone());
+        if canonical == deny_canonical || canonical.starts_with(&deny_canonical) {
+            return (SafetyLevel::Deny, Some(deny_path.display().to_string()));
+        }
+    }
+
+    // Check warn list
+    let warn = default_warn_paths();
+    for warn_path in &warn {
+        let warn_canonical = warn_path
+            .canonicalize()
+            .unwrap_or_else(|_| warn_path.clone());
+        if canonical == warn_canonical || canonical.starts_with(&warn_canonical) {
+            return (SafetyLevel::Warn, Some(warn_path.display().to_string()));
+        }
+    }
+
+    // Outside home scope → warn (not deny)
+    if enforce_scope && !is_path_in_scope(path) {
+        return (
+            SafetyLevel::Warn,
+            Some("path is outside home directory".to_string()),
+        );
+    }
+
+    (SafetyLevel::Safe, None)
 }
 
 /// Check if `path` is under the user's home directory.
@@ -153,8 +221,17 @@ mod tests {
     fn deny_paths_contains_macos_system() {
         let paths = default_deny_paths();
         assert!(paths.contains(&PathBuf::from("/System")));
-        assert!(paths.contains(&PathBuf::from("/Applications")));
-        assert!(paths.contains(&PathBuf::from("/Library")));
+        // /Applications and /Library are warn-tier, not deny
+        assert!(!paths.contains(&PathBuf::from("/Applications")));
+        assert!(!paths.contains(&PathBuf::from("/Library")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn warn_paths_contains_macos_sensitive() {
+        let warn = default_warn_paths();
+        assert!(warn.contains(&PathBuf::from("/Library")));
+        assert!(warn.contains(&PathBuf::from("/Applications")));
     }
 
     #[test]
@@ -276,5 +353,52 @@ mod tests {
     fn expand_absolute_path() {
         let result = expand_protected_paths(&["/opt/data".to_string()]);
         assert_eq!(result[0], PathBuf::from("/opt/data"));
+    }
+
+    // --- classify_path ---
+
+    #[test]
+    fn classify_system_path_denied() {
+        let (level, reason) = classify_path(Path::new("/usr/bin/ls"), &[], false);
+        assert_eq!(level, SafetyLevel::Deny);
+        assert!(reason.is_some());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn classify_library_path_warned() {
+        let (level, reason) = classify_path(Path::new("/Library/Logs/foo"), &[], false);
+        assert_eq!(level, SafetyLevel::Warn);
+        assert!(reason.unwrap().contains("/Library"));
+    }
+
+    #[test]
+    fn classify_home_cache_safe() {
+        if let Some(home) = dirs::home_dir() {
+            let (level, _) = classify_path(&home.join("Library/Caches/foo"), &[], false);
+            assert_eq!(level, SafetyLevel::Safe);
+        }
+    }
+
+    #[test]
+    fn classify_outside_home_warns_with_scope() {
+        let (level, reason) = classify_path(Path::new("/tmp/some_random_dir"), &[], true);
+        // /tmp might resolve to a home-relative path on macOS; test the logic path
+        // If it's outside home, it should warn
+        if !is_path_in_scope(Path::new("/tmp/some_random_dir")) {
+            assert_eq!(level, SafetyLevel::Warn);
+            assert!(reason.unwrap().contains("outside home"));
+        }
+    }
+
+    #[test]
+    fn classify_outside_home_safe_without_scope() {
+        // With enforce_scope=false, paths outside home are not warned
+        // (unless they hit deny/warn lists)
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("safe.txt");
+        fs::write(&file, "ok").unwrap();
+        let (level, _) = classify_path(&file, &[], false);
+        assert_eq!(level, SafetyLevel::Safe);
     }
 }

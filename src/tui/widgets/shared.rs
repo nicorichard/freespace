@@ -92,6 +92,16 @@ pub fn checkbox_str(state: &CheckState) -> &'static str {
     }
 }
 
+/// Build a flash message line with appropriate styling based on the flash level.
+pub fn flash_line<'a>(message: &'a str, level: &crate::app::FlashLevel, theme: &Theme) -> Line<'a> {
+    let style = match level {
+        crate::app::FlashLevel::Info => theme.style_size(),
+        crate::app::FlashLevel::Warning => theme.style_warning(),
+        crate::app::FlashLevel::Error => theme.style_error(),
+    };
+    Line::from(Span::styled(format!(" {}", message), style))
+}
+
 /// Normalize Emacs/terminal-style Ctrl keybindings to standard arrow keys.
 ///
 /// Ctrl+N -> Down, Ctrl+P -> Up, Ctrl+F -> Right, Ctrl+B -> Left.

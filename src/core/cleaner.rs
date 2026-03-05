@@ -13,6 +13,8 @@ pub struct CleanupOptions {
     pub audit_log: bool,
     /// Whether to enforce that paths must be under $HOME.
     pub enforce_scope: bool,
+    /// Whether to allow operations on warn-tier paths (user confirmed).
+    pub allow_warned: bool,
 }
 
 impl Default for CleanupOptions {
@@ -23,6 +25,7 @@ impl Default for CleanupOptions {
             module_id: String::new(),
             audit_log: true,
             enforce_scope: true,
+            allow_warned: false,
         }
     }
 }
@@ -108,13 +111,18 @@ pub fn delete_items(paths: &[PathBuf], opts: &CleanupOptions) -> CleanupResult {
 
 /// Run safety checks on a path. Returns an error reason if blocked, or `None` if safe.
 fn check_safety(path: &Path, opts: &CleanupOptions) -> Option<String> {
-    if let Some(rule) = safety::is_path_denied(path, &opts.protected_paths) {
-        return Some(format!("blocked by safety rule: {}", rule));
+    let (level, reason) = safety::classify_path(path, &opts.protected_paths, opts.enforce_scope);
+    match level {
+        safety::SafetyLevel::Deny => Some(format!(
+            "blocked by safety rule: {}",
+            reason.unwrap_or_default()
+        )),
+        safety::SafetyLevel::Warn if !opts.allow_warned => Some(format!(
+            "blocked by safety rule: {}",
+            reason.unwrap_or_default()
+        )),
+        _ => None,
     }
-    if opts.enforce_scope && !safety::is_path_in_scope(path) {
-        return Some("path is outside home directory".to_string());
-    }
-    None
 }
 
 #[cfg(test)]
@@ -274,5 +282,48 @@ mod tests {
             target_dir.join("file.txt").exists(),
             "target contents should still exist"
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn warn_tier_blocked_without_allow() {
+        // /Library paths are warn-tier; without allow_warned they should be blocked
+        let opts = CleanupOptions {
+            audit_log: false,
+            enforce_scope: false,
+            allow_warned: false,
+            ..CleanupOptions::default()
+        };
+        let result = check_safety(Path::new("/Library/Logs/DiagnosticReports"), &opts);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("blocked by safety rule"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn warn_tier_allowed_with_flag() {
+        // /Library paths should pass through when allow_warned is true
+        let opts = CleanupOptions {
+            audit_log: false,
+            enforce_scope: false,
+            allow_warned: true,
+            ..CleanupOptions::default()
+        };
+        let result = check_safety(Path::new("/Library/Logs/DiagnosticReports"), &opts);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn deny_tier_always_blocked() {
+        // /usr paths are deny-tier regardless of allow_warned
+        let opts = CleanupOptions {
+            audit_log: false,
+            enforce_scope: false,
+            allow_warned: true,
+            ..CleanupOptions::default()
+        };
+        let result = check_safety(Path::new("/usr/bin/ls"), &opts);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("blocked by safety rule"));
     }
 }

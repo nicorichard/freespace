@@ -63,6 +63,16 @@ pub struct App {
     pub protected_paths: Vec<PathBuf>,
     /// Whether to write audit log entries.
     pub audit_log: bool,
+    /// Whether the safety config enforces home-directory scope.
+    pub enforce_scope: bool,
+    /// Flash message displayed temporarily in the status bar.
+    pub flash_message: Option<(String, FlashLevel)>,
+    /// Remaining ticks before the flash message auto-clears.
+    pub flash_ticks: usize,
+    /// Paths blocked by safety rules during scanning (path, reason, module id, module name).
+    blocked_paths: Vec<(PathBuf, String, String, String)>,
+    /// Cached metadata for drill-in selections so size/safety survives drill stack pops.
+    pub drill_selection_cache: HashMap<PathBuf, (Option<u64>, safety::SafetyLevel)>,
 }
 
 impl App {
@@ -114,7 +124,17 @@ impl App {
             dry_run,
             protected_paths,
             audit_log,
+            enforce_scope: config.enforce_scope,
+            flash_message: None,
+            flash_ticks: 0,
+            blocked_paths: Vec::new(),
+            drill_selection_cache: HashMap::new(),
         }
+    }
+
+    /// Return paths that were blocked by safety rules during scanning.
+    pub fn blocked_paths(&self) -> &[(PathBuf, String, String, String)] {
+        &self.blocked_paths
     }
 
     /// Discover and load modules from all configured directories.
@@ -217,6 +237,14 @@ impl App {
 
             // Increment tick counter for spinner animation
             self.tick_count = self.tick_count.wrapping_add(1);
+
+            // Auto-clear flash messages
+            if self.flash_ticks > 0 {
+                self.flash_ticks -= 1;
+                if self.flash_ticks == 0 {
+                    self.flash_message = None;
+                }
+            }
         }
 
         Ok(())
@@ -226,10 +254,28 @@ impl App {
     fn process_scan_messages(&mut self) {
         while let Ok(msg) = self.scan_rx.try_recv() {
             match msg {
-                ScanMessage::ItemDiscovered { module_index, item } => {
+                ScanMessage::ItemDiscovered {
+                    module_index,
+                    mut item,
+                } => {
                     if let Some(ms) = self.modules.get_mut(module_index) {
                         ms.status = ModuleStatus::Discovering;
-                        ms.items.push(item);
+                        let (level, reason) = safety::classify_path(
+                            &item.path,
+                            &self.protected_paths,
+                            self.enforce_scope,
+                        );
+                        if level == safety::SafetyLevel::Deny {
+                            self.blocked_paths.push((
+                                item.path.clone(),
+                                reason.unwrap_or_else(|| "denied".to_string()),
+                                ms.module.id.clone(),
+                                ms.module.name.clone(),
+                            ));
+                        } else {
+                            item.safety_level = level;
+                            ms.items.push(item);
+                        }
                     }
                 }
                 ScanMessage::ItemSized {
@@ -271,6 +317,10 @@ impl App {
                     if let Some(level) = self.drill_stack.get_mut(drill_depth) {
                         if let Some(item) = level.items.get_mut(item_index) {
                             item.size = Some(size);
+                            // Keep the selection cache in sync if this item is selected
+                            if let Some(cached) = self.drill_selection_cache.get_mut(&item.path) {
+                                cached.0 = Some(size);
+                            }
                         }
                     }
                 }
@@ -292,11 +342,21 @@ impl App {
     }
 
     /// List directory children as Items (instant, sizes are None).
-    fn enumerate_directory(path: &Path) -> Vec<Item> {
+    /// Applies safety classification to each entry and filters out denied paths.
+    fn enumerate_directory(
+        path: &Path,
+        protected_paths: &[PathBuf],
+        enforce_scope: bool,
+    ) -> Vec<Item> {
         let mut items = Vec::new();
         if let Ok(entries) = std::fs::read_dir(path) {
             for entry in entries.flatten() {
                 let entry_path = entry.path();
+                let (level, _reason) =
+                    safety::classify_path(&entry_path, protected_paths, enforce_scope);
+                if level == safety::SafetyLevel::Deny {
+                    continue;
+                }
                 let name = entry_path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
@@ -312,6 +372,7 @@ impl App {
                     size: None,
                     item_type,
                     target_description: None,
+                    safety_level: level,
                 });
             }
         }
@@ -426,6 +487,12 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Show a flash message in the status bar for a number of ticks.
+    fn set_flash(&mut self, text: impl Into<String>, level: FlashLevel) {
+        self.flash_message = Some((text.into(), level));
+        self.flash_ticks = 12; // ~3 seconds at 250ms tick rate
     }
 
     /// Clear filter state (used on view transitions).
@@ -613,20 +680,28 @@ impl App {
                 if let Some(&item_idx) = sorted.get(self.selected_index) {
                     let items = self.current_detail_items(module_idx);
                     let path = items[item_idx].path.clone();
+                    let meta = (items[item_idx].size, items[item_idx].safety_level);
                     if !self.selected_items.remove(&path) {
-                        self.selected_items.insert(path);
+                        // Selecting parent: prune any already-selected children
+                        self.selected_items.retain(|p| !p.starts_with(&path));
+                        self.selected_items.insert(path.clone());
+                        self.drill_selection_cache.insert(path, meta);
+                    } else {
+                        self.drill_selection_cache.remove(&path);
                     }
                 }
             }
             // Select all visible items
             KeyCode::Char('a') => {
-                let paths: Vec<PathBuf> = self
+                let snapshot: Vec<_> = self
                     .current_detail_items(module_idx)
                     .iter()
-                    .map(|item| item.path.clone())
+                    .map(|item| (item.path.clone(), item.size, item.safety_level))
                     .collect();
-                for path in paths {
-                    self.selected_items.insert(path);
+                for (path, size, safety) in snapshot {
+                    self.selected_items.retain(|p| !p.starts_with(&path));
+                    self.selected_items.insert(path.clone());
+                    self.drill_selection_cache.insert(path, (size, safety));
                 }
             }
             // Deselect all visible items
@@ -638,6 +713,7 @@ impl App {
                     .collect();
                 for path in paths {
                     self.selected_items.remove(&path);
+                    self.drill_selection_cache.remove(&path);
                 }
             }
             // Enter: drill into directory, or cleanup if at top level
@@ -646,7 +722,11 @@ impl App {
                     let items = self.current_detail_items(module_idx);
                     if matches!(items[item_idx].item_type, ItemType::Directory) {
                         let path = items[item_idx].path.clone();
-                        let children = Self::enumerate_directory(&path);
+                        let children = Self::enumerate_directory(
+                            &path,
+                            &self.protected_paths,
+                            self.enforce_scope,
+                        );
                         let parent_selected_index = self.selected_index;
                         self.drill_stack.push(DrillLevel {
                             path,
@@ -792,7 +872,8 @@ impl App {
             protected_paths: self.protected_paths.clone(),
             module_id: String::new(),
             audit_log: self.audit_log,
-            enforce_scope: true,
+            enforce_scope: self.enforce_scope,
+            allow_warned: true, // user confirmed via cleanup dialog
         };
 
         let result = if permanent {
@@ -837,9 +918,33 @@ impl App {
             };
         }
 
+        // Show flash message for failures
+        let failed_count = result.failed.len();
+        let total_count = paths.len();
+        if failed_count > 0 && failed_count == total_count {
+            self.set_flash(
+                format!(
+                    "Blocked: {} item{} denied by safety rules",
+                    failed_count,
+                    if failed_count == 1 { "" } else { "s" }
+                ),
+                FlashLevel::Error,
+            );
+        } else if failed_count > 0 {
+            let ok_count = succeeded.len();
+            self.set_flash(
+                format!(
+                    "{}/{} cleaned; {} blocked by safety rules",
+                    ok_count, total_count, failed_count
+                ),
+                FlashLevel::Warning,
+            );
+        }
+
         // Clear drill stack and selected items
         self.drill_stack.clear();
         self.selected_items.clear();
+        self.drill_selection_cache.clear();
 
         // Refresh disk stats after cleanup
         self.refresh_disk_stats();
@@ -987,6 +1092,11 @@ impl App {
             dry_run: false,
             protected_paths: Vec::new(),
             audit_log: false,
+            enforce_scope: true,
+            flash_message: None,
+            flash_ticks: 0,
+            blocked_paths: Vec::new(),
+            drill_selection_cache: HashMap::new(),
         }
     }
 }
@@ -1010,6 +1120,14 @@ fn disk_stats() -> Option<(u64, u64)> {
 #[cfg(not(unix))]
 fn disk_stats() -> Option<(u64, u64)> {
     None
+}
+
+/// Severity level for flash messages shown in the status bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlashLevel {
+    Info,
+    Warning,
+    Error,
 }
 
 /// Which view is currently displayed.
@@ -1055,6 +1173,7 @@ pub struct Item {
     pub size: Option<u64>,
     pub item_type: ItemType,
     pub target_description: Option<String>,
+    pub safety_level: crate::core::safety::SafetyLevel,
 }
 
 /// The type of a discovered filesystem item.
@@ -1105,6 +1224,7 @@ mod tests {
                 size: Some(size),
                 item_type: ItemType::Directory,
                 target_description: None,
+                safety_level: crate::core::safety::SafetyLevel::Safe,
             })
             .collect();
         ModuleState {
