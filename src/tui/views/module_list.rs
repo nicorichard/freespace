@@ -1,7 +1,6 @@
 // Module list view (main screen).
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
@@ -12,35 +11,13 @@ use crate::tui::widgets::{
     render_status_line, CheckState,
 };
 
-/// Check whether the module at the given index uses only global (path-based) targets.
-pub(crate) fn is_global(app: &App, idx: usize) -> bool {
-    app.modules[idx]
-        .module
-        .targets
-        .iter()
-        .all(|t| !t.path.starts_with("**/"))
-}
-
-/// Sort module indices: global first, then local; by size descending within
-/// each section. 0 B modules are pushed to the bottom.
+/// Sort module indices by size descending. 0 B modules sink to the bottom.
 fn sort_modules(app: &App, indices: &mut [usize]) {
     indices.sort_by(|&a, &b| {
-        let a_global = is_global(app, a);
-        let b_global = is_global(app, b);
-
-        // Global before local
-        if a_global != b_global {
-            return if a_global {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Greater
-            };
-        }
-
         let size_a = app.modules[a].total_size;
         let size_b = app.modules[b].total_size;
 
-        // 0 B items sink to the bottom within their section
+        // 0 B items sink to the bottom
         let a_empty = size_a == Some(0);
         let b_empty = size_b == Some(0);
         if a_empty != b_empty {
@@ -108,7 +85,7 @@ const SPINNER_CHARS: &[char] = &[
 ];
 
 fn render_title_bar(app: &App, frame: &mut Frame, area: Rect) {
-    let total: u64 = app.modules.iter().filter_map(|m| m.total_size).sum();
+    let total = app.deduped_total;
 
     let disk_suffix: Vec<Span> = match (app.disk_free, app.disk_total) {
         (Some(free), Some(total)) => vec![
@@ -204,48 +181,11 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
     // The currently selected module index (in app.modules), if any
     let selected_module = navigable.get(app.selected_index).copied();
 
-    // Determine section boundaries for Global / Local headers
-    let has_global = all_sorted.iter().any(|&idx| is_global(app, idx));
-    let has_local = all_sorted.iter().any(|&idx| !is_global(app, idx));
-    let first_local_pos = if has_local {
-        all_sorted.iter().position(|&idx| !is_global(app, idx))
-    } else {
-        None
-    };
-
-    let header_style = app.theme.style_border().add_modifier(Modifier::BOLD);
-
-    // Build rows with section headers interspersed, tracking the visual row
-    // that corresponds to the selected module.
+    // Build rows, tracking the visual row that corresponds to the selected module.
     let mut rows: Vec<Row> = Vec::new();
     let mut visual_selected: usize = 0;
 
-    for (pos, &module_idx) in all_sorted.iter().enumerate() {
-        // Insert "Global" header before the first global module
-        if pos == 0 && has_global && is_global(app, module_idx) {
-            rows.push(Row::new(vec![
-                Cell::from(""),
-                Cell::from(Span::styled(
-                    "\u{2500}\u{2500} Global \u{2500}\u{2500}",
-                    header_style,
-                )),
-                Cell::from(""),
-                Cell::from(""),
-            ]));
-        }
-        // Insert "Local" header before the first local module
-        if Some(pos) == first_local_pos {
-            rows.push(Row::new(vec![
-                Cell::from(""),
-                Cell::from(Span::styled(
-                    "\u{2500}\u{2500} Local \u{2500}\u{2500}",
-                    header_style,
-                )),
-                Cell::from(""),
-                Cell::from(""),
-            ]));
-        }
-
+    for &module_idx in &all_sorted {
         // Track which visual row is the selected module
         if Some(module_idx) == selected_module {
             visual_selected = rows.len();
@@ -398,6 +338,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
                 ("i", "info"),
                 ("/", "filter"),
                 ("c", "clean"),
+                ("tab", "all items"),
                 ("?", "help"),
                 ("q", "quit"),
             ],
@@ -436,6 +377,7 @@ mod tests {
                 item_type: ItemType::Directory,
                 target_description: None,
                 safety_level: crate::core::safety::SafetyLevel::Safe,
+                is_shared: false,
             }],
             total_size: Some(size),
             status: ModuleStatus::Ready,

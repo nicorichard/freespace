@@ -1,4 +1,5 @@
 pub mod cleanup_confirm;
+pub mod flat_view;
 pub mod help;
 pub mod info;
 pub mod install_select;

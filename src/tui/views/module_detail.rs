@@ -1,6 +1,7 @@
 // Module detail view — shows individual items within a module.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
@@ -35,6 +36,28 @@ pub fn sorted_item_indices(app: &App, module_idx: usize) -> Vec<usize> {
         }
     });
     indices
+}
+
+/// Returns item indices in display order, and the group boundary positions
+/// (index into the returned Vec where each group starts).
+/// When groups are active: items are ordered by group (groups by aggregate size desc,
+/// items within each group by size desc).
+/// When not grouped: same as sorted_item_indices, no group boundaries.
+pub fn display_order_item_indices(app: &App, module_idx: usize) -> (Vec<usize>, Vec<usize>) {
+    let drilled = app.drill.is_active();
+    if !drilled {
+        let groups = grouped_item_indices(app, module_idx);
+        if groups.len() > 1 {
+            let mut order = Vec::new();
+            let mut boundaries = Vec::new();
+            for (_desc, group_indices) in &groups {
+                boundaries.push(order.len());
+                order.extend(group_indices);
+            }
+            return (order, boundaries);
+        }
+    }
+    (sorted_item_indices(app, module_idx), Vec::new())
 }
 
 /// Render the module detail view.
@@ -109,6 +132,39 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize)
     frame.render_widget(title, area);
 }
 
+/// Group sorted item indices by target_description.
+/// Returns Vec of (description, item_indices) groups. Items within each group
+/// are already sorted by size descending. Groups are ordered by aggregate size descending.
+/// Only used at the root level (not when drilled in).
+fn grouped_item_indices(app: &App, module_idx: usize) -> Vec<(Option<String>, Vec<usize>)> {
+    let items = app.current_detail_items(module_idx);
+    let sorted = sorted_item_indices(app, module_idx);
+
+    // Collect items into groups by target_description
+    let mut groups: Vec<(Option<String>, Vec<usize>)> = Vec::new();
+    let mut group_map: std::collections::HashMap<Option<String>, usize> =
+        std::collections::HashMap::new();
+
+    for &idx in &sorted {
+        let desc = items[idx].target_description.clone();
+        if let Some(&group_idx) = group_map.get(&desc) {
+            groups[group_idx].1.push(idx);
+        } else {
+            group_map.insert(desc.clone(), groups.len());
+            groups.push((desc, vec![idx]));
+        }
+    }
+
+    // Sort groups by aggregate size descending
+    groups.sort_by(|a, b| {
+        let size_a: u64 = a.1.iter().filter_map(|&i| items[i].size).sum();
+        let size_b: u64 = b.1.iter().filter_map(|&i| items[i].size).sum();
+        size_b.cmp(&size_a)
+    });
+
+    groups
+}
+
 fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
     let items = app.current_detail_items(module_idx);
     let drilled = app.drill.is_active();
@@ -151,62 +207,103 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
         return;
     }
 
-    let sorted = sorted_item_indices(app, module_idx);
+    let (display_order, group_boundaries) = display_order_item_indices(app, module_idx);
+    let has_groups = !group_boundaries.is_empty();
 
-    let rows: Vec<Row> = sorted
-        .iter()
-        .map(|&item_idx| {
-            let item = &items[item_idx];
+    let header_style = app.theme.style_border().add_modifier(Modifier::BOLD);
 
-            // Selection checkbox:
-            // - exact match or a selected ancestor covers this item = All
-            // - any child of this item is selected = Partial
-            let check_state = if app.selected_items.contains(&item.path)
-                || app.selected_items.iter().any(|p| item.path.starts_with(p))
-            {
-                CheckState::All
-            } else if app.selected_items.iter().any(|p| p.starts_with(&item.path)) {
-                CheckState::Partial
-            } else {
-                CheckState::None
-            };
-            let checkbox_cell = Cell::from(Span::styled(
-                checkbox_str(&check_state),
-                app.theme.style_normal(),
-            ));
+    let mut rows: Vec<Row> = Vec::new();
+    let mut visual_selected: usize = 0;
 
-            // Item name with folder icon for directories
-            let display_name = match item.item_type {
-                ItemType::Directory => format!("\u{1f4c1} {}", item.name),
-                ItemType::File => item.name.clone(),
-            };
-            let name_cell = Cell::from(Span::styled(display_name, app.theme.style_normal()));
+    let build_item_row = |item_idx: usize| -> Row {
+        let item = &items[item_idx];
 
-            // Size cell
-            let size_cell = match item.size {
-                Some(size) => Cell::from(Span::styled(format_size(size), app.theme.style_size())),
-                None => {
-                    if drilled {
-                        Cell::from(Span::styled(
-                            "calculating...",
-                            app.theme.style_status_loading(),
-                        ))
-                    } else {
-                        match &ms.status {
-                            ModuleStatus::Loading | ModuleStatus::Discovering => Cell::from(
-                                Span::styled("calculating...", app.theme.style_status_loading()),
-                            ),
-                            _ => {
-                                Cell::from(Span::styled("N/A \u{26a0}", app.theme.style_warning()))
-                            }
-                        }
+        let check_state = if app.selected_items.contains(&item.path)
+            || app.selected_items.iter().any(|p| item.path.starts_with(p))
+        {
+            CheckState::All
+        } else if app.selected_items.iter().any(|p| p.starts_with(&item.path)) {
+            CheckState::Partial
+        } else {
+            CheckState::None
+        };
+        let checkbox_cell = Cell::from(Span::styled(
+            checkbox_str(&check_state),
+            app.theme.style_normal(),
+        ));
+
+        let display_name = match item.item_type {
+            ItemType::Directory => format!("\u{1f4c1} {}", item.name),
+            ItemType::File => item.name.clone(),
+        };
+        let name_cell = if item.is_shared {
+            Cell::from(Line::from(vec![
+                Span::styled(display_name, app.theme.style_normal()),
+                Span::styled(" (shared)", app.theme.style_description()),
+            ]))
+        } else {
+            Cell::from(Span::styled(display_name, app.theme.style_normal()))
+        };
+
+        let size_cell = match item.size {
+            Some(size) => Cell::from(Span::styled(format_size(size), app.theme.style_size())),
+            None => {
+                if drilled {
+                    Cell::from(Span::styled(
+                        "calculating...",
+                        app.theme.style_status_loading(),
+                    ))
+                } else {
+                    match &ms.status {
+                        ModuleStatus::Loading | ModuleStatus::Discovering => Cell::from(
+                            Span::styled("calculating...", app.theme.style_status_loading()),
+                        ),
+                        _ => Cell::from(Span::styled("N/A \u{26a0}", app.theme.style_warning())),
                     }
                 }
-            };
+            }
+        };
 
-            Row::new(vec![checkbox_cell, name_cell, size_cell])
-        })
-        .collect();
+        Row::new(vec![checkbox_cell, name_cell, size_cell])
+    };
+
+    if has_groups {
+        // Render with target group section headers
+        let groups = grouped_item_indices(app, module_idx);
+
+        for (group_pos, (desc, group_indices)) in groups.iter().enumerate() {
+            // Section header row
+            let group_size: u64 = group_indices.iter().filter_map(|&i| items[i].size).sum();
+            let label = desc.as_deref().unwrap_or("Other");
+            let header_text = format!(
+                "\u{2500}\u{2500} {} \u{2500}\u{2500} {} \u{2500}\u{2500}",
+                label,
+                format_size(group_size)
+            );
+            rows.push(Row::new(vec![
+                Cell::from(""),
+                Cell::from(Span::styled(header_text, header_style)),
+                Cell::from(""),
+            ]));
+
+            let group_start = group_boundaries[group_pos];
+            for (i, &_item_idx) in group_indices.iter().enumerate() {
+                let display_pos = group_start + i;
+                if display_pos == app.selected_index {
+                    visual_selected = rows.len();
+                }
+                rows.push(build_item_row(display_order[display_pos]));
+            }
+        }
+    } else {
+        // Flat rendering (single group or drilled in)
+        for (pos, &item_idx) in display_order.iter().enumerate() {
+            if pos == app.selected_index {
+                visual_selected = rows.len();
+            }
+            rows.push(build_item_row(item_idx));
+        }
+    }
 
     let widths = [
         Constraint::Length(5),  // Checkbox
@@ -225,15 +322,15 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
         .highlight_symbol("\u{25b6} ");
 
     let mut state = TableState::default();
-    state.select(Some(app.selected_index));
+    state.select(Some(visual_selected));
     frame.render_stateful_widget(table, area, &mut state);
 }
 
 fn render_description_pane(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
-    let sorted = sorted_item_indices(app, module_idx);
+    let (display_order, _) = display_order_item_indices(app, module_idx);
     let items = app.current_detail_items(module_idx);
 
-    let description = sorted
+    let description = display_order
         .get(app.selected_index)
         .and_then(|&idx| items.get(idx))
         .and_then(|item| item.target_description.as_deref())
@@ -247,10 +344,10 @@ fn render_description_pane(app: &App, frame: &mut Frame, area: Rect, module_idx:
 }
 
 fn render_path_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
-    let sorted = sorted_item_indices(app, module_idx);
+    let (display_order, _) = display_order_item_indices(app, module_idx);
     let items = app.current_detail_items(module_idx);
 
-    let path_text = sorted
+    let path_text = display_order
         .get(app.selected_index)
         .and_then(|&idx| items.get(idx))
         .map(|item| format!(" {}", item.path.display()))
@@ -283,21 +380,25 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize
             Span::styled("/ filter  Esc clear", app.theme.style_normal()),
         ])
     } else {
-        keybinding_bar(
-            &[
-                ("space", "select"),
-                ("a", "all"),
-                ("n", "none"),
-                ("o", "open"),
-                ("i", "info"),
-                ("/", "filter"),
-                ("c", "clean"),
-                ("esc", "back"),
-                ("?", "help"),
-                ("q", "quit"),
-            ],
-            &app.theme,
-        )
+        let (_, boundaries) = display_order_item_indices(app, module_idx);
+        let mut bindings: Vec<(&str, &str)> = vec![
+            ("space", "select"),
+            ("a", "all"),
+            ("n", "none"),
+            ("o", "open"),
+            ("i", "info"),
+        ];
+        if !boundaries.is_empty() {
+            bindings.push(("h/l", "group"));
+        }
+        bindings.extend([
+            ("/", "filter"),
+            ("c", "clean"),
+            ("esc", "back"),
+            ("?", "help"),
+            ("q", "quit"),
+        ]);
+        keybinding_bar(&bindings, &app.theme)
     };
     render_status_line(frame, area, line, &app.theme);
 }
@@ -332,6 +433,7 @@ mod tests {
                     item_type: ItemType::Directory,
                     target_description: None,
                     safety_level: crate::core::safety::SafetyLevel::Safe,
+                    is_shared: false,
                 },
                 Item {
                     name: "small-file".to_string(),
@@ -340,6 +442,7 @@ mod tests {
                     item_type: ItemType::File,
                     target_description: None,
                     safety_level: crate::core::safety::SafetyLevel::Safe,
+                    is_shared: false,
                 },
             ],
             total_size: Some(5_000_001_000),
