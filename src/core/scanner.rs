@@ -148,6 +148,7 @@ fn scan_module(
                     size: None,
                     item_type: ItemType::Directory,
                     target_description: target.description.clone(),
+                    safety_level: crate::core::safety::SafetyLevel::Safe,
                 };
 
                 if tx
@@ -181,6 +182,7 @@ fn scan_module(
                     size: None,
                     item_type,
                     target_description: target.description.clone(),
+                    safety_level: crate::core::safety::SafetyLevel::Safe,
                 };
 
                 if tx

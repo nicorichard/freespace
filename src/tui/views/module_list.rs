@@ -8,7 +8,7 @@ use ratatui::Frame;
 
 use crate::app::{matches_filter, App, ModuleStatus, ScanStatus};
 use crate::tui::widgets::{
-    checkbox_str, format_size, format_size_or_placeholder, keybinding_bar, module_icon,
+    checkbox_str, flash_line, format_size, format_size_or_placeholder, keybinding_bar, module_icon,
     render_status_line, CheckState,
 };
 
@@ -262,13 +262,17 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
         };
 
         // Checkbox: compute selection state for this module
+        // An item counts as selected if it is directly selected OR has any selected child.
         let check_state = if ms.items.is_empty() {
             CheckState::None
         } else {
             let selected_count = ms
                 .items
                 .iter()
-                .filter(|item| app.selected_items.contains(&item.path))
+                .filter(|item| {
+                    app.selected_items.contains(&item.path)
+                        || app.selected_items.iter().any(|p| p.starts_with(&item.path))
+                })
                 .count();
             if selected_count == 0 {
                 CheckState::None
@@ -364,7 +368,9 @@ fn render_description_pane(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
-    let line = if app.filter_active {
+    let line = if let Some((ref msg, ref level)) = app.flash_message {
+        flash_line(msg, level, &app.theme)
+    } else if app.filter_active {
         // Active filter input mode
         Line::from(vec![
             Span::styled(" / ", app.theme.style_size()),
@@ -429,6 +435,7 @@ mod tests {
                 size: Some(size),
                 item_type: ItemType::Directory,
                 target_description: None,
+                safety_level: crate::core::safety::SafetyLevel::Safe,
             }],
             total_size: Some(size),
             status: ModuleStatus::Ready,

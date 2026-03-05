@@ -23,6 +23,7 @@ pub struct AppConfig {
     pub search_dirs: Vec<String>,
     pub audit_log: bool,
     pub protected_paths: Vec<String>,
+    pub enforce_scope: bool,
 }
 
 impl Default for AppConfig {
@@ -33,6 +34,7 @@ impl Default for AppConfig {
             search_dirs: Vec::new(),
             audit_log: true,
             protected_paths: Vec::new(),
+            enforce_scope: true,
         }
     }
 }

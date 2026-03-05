@@ -75,6 +75,20 @@ async fn main() -> anyhow::Result<()> {
 
             // Restore terminal on normal exit
             tui::restore()?;
+
+            // Report any paths that were blocked by safety rules
+            let blocked = app.blocked_paths();
+            if !blocked.is_empty() {
+                eprintln!();
+                eprintln!(
+                    "note: {} path{} blocked by safety rules:",
+                    blocked.len(),
+                    if blocked.len() == 1 { " was" } else { "s were" }
+                );
+                for (path, reason, id, name) in blocked {
+                    eprintln!("  {} ({}, from {} [{}])", path.display(), reason, name, id);
+                }
+            }
         }
         Some(Command::Module { command }) => {
             let modules_dir = config::default_modules_dir()
