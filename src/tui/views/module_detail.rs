@@ -48,7 +48,7 @@ pub fn render(app: &App, frame: &mut Frame, module_idx: usize) {
         return;
     }
 
-    let title_height = if app.drill_stack.is_empty() { 4 } else { 3 };
+    let title_height = if !app.drill.is_active() { 4 } else { 3 };
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -72,7 +72,7 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize)
     let ms = &app.modules[module_idx];
     let icon = module_icon(&ms.module.name);
 
-    let title_text = if app.drill_stack.is_empty() {
+    let title_text = if !app.drill.is_active() {
         let size_text = match &ms.status {
             ModuleStatus::Loading | ModuleStatus::Discovering => "calculating...".to_string(),
             ModuleStatus::Error(e) => format!("Error: {}", e),
@@ -82,18 +82,11 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize)
     } else {
         // Breadcrumb: module > dir1 > dir2
         let mut parts = vec![ms.module.name.clone()];
-        for level in &app.drill_stack {
-            let dir_name = level
-                .path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| level.path.display().to_string());
-            parts.push(dir_name);
-        }
+        parts.extend(app.drill.breadcrumb_parts());
         format!(" {} {} ", icon, parts.join(" > "))
     };
 
-    let lines = if app.drill_stack.is_empty() {
+    let lines = if !app.drill.is_active() {
         vec![
             Line::from(vec![Span::styled(title_text, app.theme.style_header())]),
             Line::from(vec![Span::styled(
@@ -118,7 +111,7 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize)
 
 fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
     let items = app.current_detail_items(module_idx);
-    let drilled = !app.drill_stack.is_empty();
+    let drilled = app.drill.is_active();
     let ms = &app.modules[module_idx];
 
     if items.is_empty() {
@@ -165,8 +158,12 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
         .map(|&item_idx| {
             let item = &items[item_idx];
 
-            // Selection checkbox — exact match = All, any child selected = Partial
-            let check_state = if app.selected_items.contains(&item.path) {
+            // Selection checkbox:
+            // - exact match or a selected ancestor covers this item = All
+            // - any child of this item is selected = Partial
+            let check_state = if app.selected_items.contains(&item.path)
+                || app.selected_items.iter().any(|p| item.path.starts_with(p))
+            {
                 CheckState::All
             } else if app.selected_items.iter().any(|p| p.starts_with(&item.path)) {
                 CheckState::Partial
