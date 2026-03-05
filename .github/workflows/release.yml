@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,6 +24,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Version sync check
+        if: github.event_name == 'push'
         run: |
           CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -50,6 +52,7 @@ jobs:
             freespace-*.tar.gz.sha256
 
   release:
+    if: github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
     permissions:
