@@ -238,10 +238,20 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
 
         // Size cell with appropriate styling
         let size_cell = match &ms.status {
-            ModuleStatus::Loading | ModuleStatus::Discovering => Cell::from(Span::styled(
-                "calculating...",
-                app.theme.style_status_loading(),
-            )),
+            ModuleStatus::Loading | ModuleStatus::Discovering => {
+                if let Some(cached) = ms.total_size {
+                    // Show cached size while still scanning
+                    Cell::from(Span::styled(
+                        format!("~{}", format_size(cached)),
+                        app.theme.style_status_loading(),
+                    ))
+                } else {
+                    Cell::from(Span::styled(
+                        "calculating...",
+                        app.theme.style_status_loading(),
+                    ))
+                }
+            }
             ModuleStatus::Error(e) => Cell::from(Span::styled(
                 format!("\u{26a0} {}", e),
                 app.theme.style_error(),

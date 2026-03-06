@@ -345,7 +345,7 @@ mod tests {
         s.handle_key(KeyCode::Char('j'), KeyModifiers::NONE);
         s.handle_key(KeyCode::Char('k'), KeyModifiers::NONE);
         s.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
-        assert_eq!(s.selected_indices(), vec![]);
+        assert_eq!(s.selected_indices(), Vec::<usize>::new());
     }
 
     #[test]

@@ -97,7 +97,13 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize)
 
     let title_text = if !app.drill.is_active() {
         let size_text = match &ms.status {
-            ModuleStatus::Loading | ModuleStatus::Discovering => "calculating...".to_string(),
+            ModuleStatus::Loading | ModuleStatus::Discovering => {
+                if let Some(cached) = ms.total_size {
+                    format!("~{}", format_size(cached))
+                } else {
+                    "calculating...".to_string()
+                }
+            }
             ModuleStatus::Error(e) => format!("Error: {}", e),
             ModuleStatus::Ready => format_size_or_placeholder(ms.total_size),
         };

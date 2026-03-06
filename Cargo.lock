@@ -390,6 +390,7 @@ dependencies = [
  "predicates",
  "ratatui",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",

@@ -3,12 +3,15 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use tokio::sync::mpsc;
 
 use crate::config::AppConfig;
+use crate::core::cache::SizeCache;
 use crate::core::cleaner::{self, CleanupOptions};
 use crate::core::safety;
 use crate::core::scanner::{self, ScanMessage};
@@ -75,6 +78,10 @@ pub struct App {
     seen_paths: HashSet<PathBuf>,
     /// Accurate global total counting each unique path once across modules.
     pub deduped_total: u64,
+    /// Shared size cache for persisting sizes across launches.
+    size_cache: Arc<Mutex<SizeCache>>,
+    /// Flag to signal background scan tasks to stop.
+    cancel_flag: Arc<AtomicBool>,
 }
 
 impl App {
@@ -86,8 +93,14 @@ impl App {
         let protected_paths = safety::expand_protected_paths(&config.protected_paths);
         let audit_log = config.audit_log;
 
+        // Load persistent size cache
+        let size_cache = Arc::new(Mutex::new(SizeCache::load()));
+
         // Create channel for scan messages
         let (tx, rx) = mpsc::unbounded_channel();
+
+        // Cancellation flag for background scans
+        let cancel_flag = Arc::new(AtomicBool::new(false));
 
         // Collect module manifests for the scanner
         let manifests: Vec<Module> = modules.iter().map(|ms| ms.module.clone()).collect();
@@ -96,7 +109,13 @@ impl App {
         let scan_status = if manifests.is_empty() {
             ScanStatus::Complete
         } else {
-            scanner::start_scan(manifests, tx.clone(), search_dirs);
+            scanner::start_scan(
+                manifests,
+                tx.clone(),
+                search_dirs,
+                Arc::clone(&size_cache),
+                Arc::clone(&cancel_flag),
+            );
             ScanStatus::Scanning
         };
 
@@ -132,6 +151,8 @@ impl App {
             blocked_paths: Vec::new(),
             seen_paths: HashSet::new(),
             deduped_total: 0,
+            size_cache,
+            cancel_flag,
         }
     }
 
@@ -250,6 +271,12 @@ impl App {
             }
         }
 
+        // Signal background scans to stop and save any cached sizes
+        self.cancel_flag.store(true, Ordering::Relaxed);
+        if let Ok(c) = self.size_cache.lock() {
+            c.save();
+        }
+
         Ok(())
     }
 
@@ -277,6 +304,22 @@ impl App {
                             ));
                         } else {
                             item.safety_level = level;
+                            // If the item arrived with a cached size, count it
+                            // toward module and global totals immediately.
+                            if let Some(cached) = item.size {
+                                let canonical = item
+                                    .path
+                                    .canonicalize()
+                                    .unwrap_or_else(|_| item.path.clone());
+                                let is_new = self.seen_paths.insert(canonical);
+                                if !is_new {
+                                    item.is_shared = true;
+                                }
+                                if is_new {
+                                    self.deduped_total += cached;
+                                }
+                                ms.total_size = Some(ms.total_size.unwrap_or(0) + cached);
+                            }
                             ms.items.push(item);
                         }
                     }
@@ -292,22 +335,45 @@ impl App {
                                 .canonicalize()
                                 .unwrap_or_else(|_| item.path.clone())
                         });
-                        let is_new = canonical
-                            .as_ref()
-                            .map(|c| self.seen_paths.insert(c.clone()))
-                            .unwrap_or(true);
 
                         if let Some(item) = ms.items.get_mut(item_index) {
+                            let old_size = item.size;
                             item.size = Some(size);
+
+                            // Adjust module total: replace cached value with fresh
+                            match old_size {
+                                Some(cached) => {
+                                    // Replace cached with fresh
+                                    let total = ms.total_size.unwrap_or(0);
+                                    ms.total_size =
+                                        Some(total.saturating_sub(cached).saturating_add(size));
+                                }
+                                None => {
+                                    ms.total_size =
+                                        Some(ms.total_size.unwrap_or(0).saturating_add(size));
+                                }
+                            }
+
+                            // Adjust deduped total
+                            let is_new = canonical
+                                .as_ref()
+                                .map(|c| self.seen_paths.insert(c.clone()))
+                                .unwrap_or(true);
                             if !is_new {
                                 item.is_shared = true;
                             }
+                            if is_new {
+                                // First time seeing this path — add fresh size
+                                self.deduped_total += size;
+                            } else if old_size.is_some() {
+                                // Already seen (was cached) — adjust delta
+                                let cached = old_size.unwrap();
+                                self.deduped_total = self
+                                    .deduped_total
+                                    .saturating_sub(cached)
+                                    .saturating_add(size);
+                            }
                         }
-                        if is_new {
-                            self.deduped_total += size;
-                        }
-                        // Per-module total stays as-is (honest per-module size)
-                        ms.total_size = Some(ms.total_size.unwrap_or(0) + size);
                     }
                 }
                 ScanMessage::ModuleComplete { module_index } => {
@@ -405,9 +471,13 @@ impl App {
     fn spawn_drill_size_scan(&self, drill_depth: usize) {
         let tx = self.scan_tx.clone();
         let items = self.drill.scan_paths_at_depth(drill_depth);
+        let cancel = Arc::clone(&self.cancel_flag);
         tokio::task::spawn_blocking(move || {
             for (item_index, path) in items.iter().enumerate() {
-                let size = scanner::calculate_size(path);
+                let size = match scanner::calculate_size_cancellable(path, &cancel) {
+                    Some(s) => s,
+                    None => return,
+                };
                 if tx
                     .send(ScanMessage::DrillItemSized {
                         drill_depth,
@@ -1059,6 +1129,14 @@ impl App {
             );
         }
 
+        // Remove deleted items from the size cache and persist
+        if let Ok(mut cache) = self.size_cache.lock() {
+            for path in &succeeded {
+                cache.remove(path);
+            }
+            cache.save();
+        }
+
         // Recalculate deduped_total and seen_paths from scratch
         self.recalculate_dedup();
 
@@ -1245,6 +1323,8 @@ impl App {
             blocked_paths: Vec::new(),
             seen_paths: HashSet::new(),
             deduped_total: 0,
+            size_cache: Arc::new(Mutex::new(SizeCache::load())),
+            cancel_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 }

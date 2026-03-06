@@ -1,10 +1,13 @@
 // Filesystem scanner for discovering items and calculating sizes.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
 use crate::app::{Item, ItemType};
+use crate::core::cache::SizeCache;
 use crate::module::manifest::Module;
 
 /// Messages sent from the scanner to the TUI event loop.
@@ -86,6 +89,36 @@ pub fn calculate_size(path: &Path) -> u64 {
     }
 }
 
+/// Like `calculate_size` but checks a cancellation flag periodically.
+/// Returns `None` if cancelled.
+pub fn calculate_size_cancellable(path: &Path, cancel: &AtomicBool) -> Option<u64> {
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    if path.is_file() {
+        Some(
+            std::fs::metadata(path)
+                .map(|m| file_disk_size(&m))
+                .unwrap_or(0),
+        )
+    } else if path.is_dir() {
+        let mut total = 0u64;
+        for entry in walkdir::WalkDir::new(path).into_iter() {
+            if cancel.load(Ordering::Relaxed) {
+                return None;
+            }
+            if let Ok(e) = entry {
+                if e.file_type().is_file() {
+                    total += e.metadata().map(|m| file_disk_size(&m)).unwrap_or(0);
+                }
+            }
+        }
+        Some(total)
+    } else {
+        Some(0)
+    }
+}
+
 /// Discover local directories matching `dir_name` under the given search roots.
 pub(crate) fn discover_local_dirs(dir_name: &str, search_roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut results = Vec::new();
@@ -125,13 +158,19 @@ pub(crate) fn local_item_name(path: &Path, dir_name: &str) -> String {
 
 /// Scan a single module: discover items (sent with size: None), then calculate
 /// sizes and send `ItemSized` messages. Finally sends `ModuleComplete`.
+///
+/// If a size cache is provided, cached sizes are sent immediately during
+/// discovery, and fresh sizes are sent (and cached) during the sizing phase.
 fn scan_module(
     module_index: usize,
     module: &Module,
     search_dirs: &[PathBuf],
     tx: &mpsc::UnboundedSender<ScanMessage>,
+    cache: &Arc<Mutex<SizeCache>>,
+    cancel: &Arc<AtomicBool>,
 ) {
     // Phase 1: Discover all items (fast — no size calculation)
+    // If a cached size exists, send it right away so the UI is instant.
     let mut item_index = 0usize;
     let mut paths_to_size: Vec<(usize, PathBuf)> = Vec::new();
 
@@ -142,10 +181,13 @@ fn scan_module(
             for path in paths {
                 let name = local_item_name(&path, dir_name);
 
+                // Check cache for an instant size
+                let cached_size = cache.lock().ok().and_then(|c| c.get(&path));
+
                 let item = Item {
                     name,
                     path: path.clone(),
-                    size: None,
+                    size: cached_size,
                     item_type: ItemType::Directory,
                     target_description: target.description.clone(),
                     safety_level: crate::core::safety::SafetyLevel::Safe,
@@ -177,10 +219,12 @@ fn scan_module(
                     ItemType::File
                 };
 
+                let cached_size = cache.lock().ok().and_then(|c| c.get(&path));
+
                 let item = Item {
                     name,
                     path: path.clone(),
-                    size: None,
+                    size: cached_size,
                     item_type,
                     target_description: target.description.clone(),
                     safety_level: crate::core::safety::SafetyLevel::Safe,
@@ -200,9 +244,19 @@ fn scan_module(
         }
     }
 
-    // Phase 2: Calculate sizes and send ItemSized messages
+    // Phase 2: Calculate fresh sizes, update cache, and send ItemSized messages
     for (idx, path) in paths_to_size {
-        let size = calculate_size(&path);
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        let size = match calculate_size_cancellable(&path, cancel) {
+            Some(s) => s,
+            None => return, // cancelled
+        };
+        // Update the shared cache with the fresh size
+        if let Ok(mut c) = cache.lock() {
+            c.set(path, size);
+        }
         if tx
             .send(ScanMessage::ItemSized {
                 module_index,
@@ -219,32 +273,43 @@ fn scan_module(
 }
 
 /// Spawn background tasks that scan all modules in parallel and send results via the channel.
+/// The shared `SizeCache` is used to provide instant cached sizes during discovery
+/// and is updated with fresh sizes during the sizing phase.
 pub fn start_scan(
     modules: Vec<Module>,
     tx: mpsc::UnboundedSender<ScanMessage>,
     search_dirs: Vec<PathBuf>,
+    cache: Arc<Mutex<SizeCache>>,
+    cancel: Arc<AtomicBool>,
 ) {
-    let search_dirs = std::sync::Arc::new(search_dirs);
+    let search_dirs = Arc::new(search_dirs);
     let module_count = modules.len();
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<()>();
 
     // Spawn one blocking task per module
     for (module_index, module) in modules.into_iter().enumerate() {
         let tx = tx.clone();
-        let search_dirs = std::sync::Arc::clone(&search_dirs);
+        let search_dirs = Arc::clone(&search_dirs);
         let done_tx = done_tx.clone();
+        let cache = Arc::clone(&cache);
+        let cancel = Arc::clone(&cancel);
         tokio::task::spawn_blocking(move || {
-            scan_module(module_index, &module, &search_dirs, &tx);
+            scan_module(module_index, &module, &search_dirs, &tx, &cache, &cancel);
             let _ = done_tx.send(());
         });
     }
 
-    // Spawn a task that waits for all module scans to finish, then sends ScanComplete
+    // Spawn a task that waits for all module scans to finish, then sends ScanComplete.
+    // Cache is saved incrementally after each module completes.
     drop(done_tx); // Drop our copy so the channel closes when all tasks finish
     tokio::spawn(async move {
         let mut completed = 0;
         while done_rx.recv().await.is_some() {
             completed += 1;
+            // Save cache after each module completes
+            if let Ok(c) = cache.lock() {
+                c.save();
+            }
             if completed == module_count {
                 break;
             }
@@ -410,7 +475,9 @@ mod tests {
         };
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        start_scan(vec![module], tx, vec![]);
+        let cache = Arc::new(Mutex::new(SizeCache::load()));
+        let cancel = Arc::new(AtomicBool::new(false));
+        start_scan(vec![module], tx, vec![], cache, cancel);
 
         let mut got_item = false;
         let mut got_sized = false;

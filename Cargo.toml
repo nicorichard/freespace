@@ -11,6 +11,7 @@ tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 walkdir = "2"
 glob = "0.3"
 humansize = "2"

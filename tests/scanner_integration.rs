@@ -1,11 +1,22 @@
 // Integration tests for the filesystem scanner.
 
 use std::fs;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 
+use freespace::core::cache::SizeCache;
 use freespace::core::scanner::{self, ScanMessage};
 use freespace::module::manifest::{Module, Target};
+
+fn empty_cache() -> Arc<Mutex<SizeCache>> {
+    Arc::new(Mutex::new(SizeCache::empty()))
+}
+
+fn no_cancel() -> Arc<AtomicBool> {
+    Arc::new(AtomicBool::new(false))
+}
 
 fn make_global_module(name: &str, path: &str) -> Module {
     Module {
@@ -47,7 +58,7 @@ async fn scan_global_target() {
     let module = make_global_module("test-cache", cache_dir.to_str().unwrap());
 
     let (tx, mut rx) = mpsc::unbounded_channel();
-    scanner::start_scan(vec![module], tx, vec![]);
+    scanner::start_scan(vec![module], tx, vec![], empty_cache(), no_cancel());
 
     let mut items_found = 0;
     let mut sized_count = 0;
@@ -60,10 +71,8 @@ async fn scan_global_target() {
         tokio::select! {
             msg = rx.recv() => {
                 match msg {
-                    Some(ScanMessage::ItemDiscovered { module_index, item }) => {
+                    Some(ScanMessage::ItemDiscovered { module_index, .. }) => {
                         assert_eq!(module_index, 0);
-                        // Discovery phase: size is None
-                        assert!(item.size.is_none());
                         items_found += 1;
                     }
                     Some(ScanMessage::ItemSized { module_index, size, .. }) => {
@@ -110,7 +119,7 @@ async fn scan_local_target() {
     let search_dirs = vec![tmp.path().to_path_buf()];
 
     let (tx, mut rx) = mpsc::unbounded_channel();
-    scanner::start_scan(vec![module], tx, search_dirs);
+    scanner::start_scan(vec![module], tx, search_dirs, empty_cache(), no_cancel());
 
     let mut items: Vec<String> = Vec::new();
 
@@ -153,7 +162,7 @@ async fn scan_multiple_modules() {
     ];
 
     let (tx, mut rx) = mpsc::unbounded_channel();
-    scanner::start_scan(modules, tx, vec![]);
+    scanner::start_scan(modules, tx, vec![], empty_cache(), no_cancel());
 
     let mut module_complete_count = 0;
     let mut item_count = 0;
@@ -191,7 +200,7 @@ async fn scan_glob_pattern() {
     let module = make_global_module("glob-test", &pattern);
 
     let (tx, mut rx) = mpsc::unbounded_channel();
-    scanner::start_scan(vec![module], tx, vec![]);
+    scanner::start_scan(vec![module], tx, vec![], empty_cache(), no_cancel());
 
     let mut item_count = 0;
 

@@ -1,4 +1,5 @@
 use std::fs;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 
@@ -57,38 +58,55 @@ enum ModuleCommand {
     },
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         None => {
+            // Build a manual runtime so we can enforce a fast shutdown timeout
+            let rt = tokio::runtime::Runtime::new()?;
+
             // Install panic hook to restore terminal on panic
             tui::install_panic_hook();
 
             // Initialize terminal
             let mut terminal = tui::init()?;
 
-            // Create app and run the main event loop
-            let mut app = app::App::new(cli.module_dirs, cli.search_dirs, cli.dry_run);
-            app.run(&mut terminal)?;
+            // Create app and run the main event loop inside the runtime
+            let result = rt.block_on(async {
+                let mut app = app::App::new(cli.module_dirs, cli.search_dirs, cli.dry_run);
+                let run_result = app.run(&mut terminal);
 
-            // Restore terminal on normal exit
-            tui::restore()?;
+                // Restore terminal on normal exit
+                tui::restore()?;
 
-            // Report any paths that were blocked by safety rules
-            let blocked = app.blocked_paths();
-            if !blocked.is_empty() {
-                eprintln!();
-                eprintln!(
-                    "note: {} path{} blocked by safety rules:",
-                    blocked.len(),
-                    if blocked.len() == 1 { " was" } else { "s were" }
-                );
-                for (path, reason, id, name) in blocked {
-                    eprintln!("  {} ({}, from {} [{}])", path.display(), reason, name, id);
+                // Report any paths that were blocked by safety rules
+                let blocked = app.blocked_paths();
+                if !blocked.is_empty() {
+                    eprintln!();
+                    eprintln!(
+                        "note: {} path{} blocked by safety rules:",
+                        blocked.len(),
+                        if blocked.len() == 1 { " was" } else { "s were" }
+                    );
+                    for (path, reason, id, name) in blocked {
+                        eprintln!(
+                            "  {} ({}, from {} [{}])",
+                            path.display(),
+                            reason,
+                            name,
+                            id
+                        );
+                    }
                 }
-            }
+
+                run_result
+            });
+
+            // Force-shutdown the runtime so lingering scan tasks don't block exit
+            rt.shutdown_timeout(Duration::from_millis(500));
+
+            result?;
         }
         Some(Command::Module { command }) => {
             let modules_dir = config::default_modules_dir()
