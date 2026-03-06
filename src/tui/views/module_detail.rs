@@ -380,7 +380,6 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize
             Span::styled("/ filter  Esc clear", app.theme.style_normal()),
         ])
     } else {
-        let (_, boundaries) = display_order_item_indices(app, module_idx);
         let mut bindings: Vec<(&str, &str)> = vec![
             ("space", "select"),
             ("a", "all"),
@@ -388,9 +387,6 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize
             ("o", "open"),
             ("i", "info"),
         ];
-        if !boundaries.is_empty() {
-            bindings.push(("h/l", "group"));
-        }
         bindings.extend([
             ("/", "filter"),
             ("c", "clean"),
