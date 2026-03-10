@@ -55,6 +55,10 @@ These ship with freespace and work out of the box:
 - **Docker** — Docker Desktop disk images and build cache
 - **General Caches** — `~/Library/Caches`, `~/.cache`
 
+## Configuration
+
+Freespace can be configured via `~/.config/freespace/config.toml`. See the [configuration docs](docs/configuration.md) for all available options.
+
 ## Community Modules
 
 Install a module from GitHub:
