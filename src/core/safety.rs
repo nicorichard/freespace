@@ -66,6 +66,7 @@ fn default_deny_paths() -> Vec<PathBuf> {
 
 /// Returns platform-specific paths that warrant a warning but are not hard-denied.
 fn default_warn_paths() -> Vec<PathBuf> {
+    #[allow(unused_mut)]
     let mut paths: Vec<PathBuf> = vec![];
 
     #[cfg(target_os = "macos")]
