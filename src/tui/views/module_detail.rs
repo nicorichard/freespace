@@ -12,16 +12,10 @@ use crate::tui::widgets::{
     render_status_line, CheckState,
 };
 
-/// Spinner characters that cycle during loading.
-const SPINNER_CHARS: &[char] = &[
-    '\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}', '\u{2827}',
-    '\u{2807}', '\u{280f}',
-];
-
 /// Compute item indices sorted by size descending.
 /// Items with known sizes sort before those still calculating (None).
 pub fn sorted_item_indices(app: &App, module_idx: usize) -> Vec<usize> {
-    let items = app.current_detail_items(module_idx);
+    let items = &app.modules[module_idx].items;
     let mut indices: Vec<usize> = (0..items.len())
         .filter(|&i| matches_filter(&items[i].name, &app.filter_query))
         .collect();
@@ -44,18 +38,15 @@ pub fn sorted_item_indices(app: &App, module_idx: usize) -> Vec<usize> {
 /// items within each group by size desc).
 /// When not grouped: same as sorted_item_indices, no group boundaries.
 pub fn display_order_item_indices(app: &App, module_idx: usize) -> (Vec<usize>, Vec<usize>) {
-    let drilled = app.drill.is_active();
-    if !drilled {
-        let groups = grouped_item_indices(app, module_idx);
-        if groups.len() > 1 {
-            let mut order = Vec::new();
-            let mut boundaries = Vec::new();
-            for (_desc, group_indices) in &groups {
-                boundaries.push(order.len());
-                order.extend(group_indices);
-            }
-            return (order, boundaries);
+    let groups = grouped_item_indices(app, module_idx);
+    if groups.len() > 1 {
+        let mut order = Vec::new();
+        let mut boundaries = Vec::new();
+        for (_desc, group_indices) in &groups {
+            boundaries.push(order.len());
+            order.extend(group_indices);
         }
+        return (order, boundaries);
     }
     (sorted_item_indices(app, module_idx), Vec::new())
 }
@@ -71,16 +62,14 @@ pub fn render(app: &App, frame: &mut Frame, module_idx: usize) {
         return;
     }
 
-    let title_height = if !app.drill.is_active() { 4 } else { 3 };
-
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(title_height), // Title bar (taller at root for description)
-            Constraint::Min(1),               // Content
-            Constraint::Length(1),            // Description pane
-            Constraint::Length(1),            // Path bar
-            Constraint::Length(1),            // Status bar
+            Constraint::Length(4), // Title bar (with description)
+            Constraint::Min(1),    // Content
+            Constraint::Length(1), // Description pane
+            Constraint::Length(1), // Path bar
+            Constraint::Length(1), // Status bar
         ])
         .split(area);
 
@@ -95,34 +84,20 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize)
     let ms = &app.modules[module_idx];
     let icon = module_icon(&ms.module.name);
 
-    let title_text = if !app.drill.is_active() {
-        let size_text = match &ms.status {
-            ModuleStatus::Loading | ModuleStatus::Discovering => "calculating...".to_string(),
-            ModuleStatus::Error(e) => format!("Error: {}", e),
-            ModuleStatus::Ready => format_size_or_placeholder(ms.total_size),
-        };
-        format!(" {} {} \u{2014} {} ", icon, ms.module.name, size_text)
-    } else {
-        // Breadcrumb: module > dir1 > dir2
-        let mut parts = vec![ms.module.name.clone()];
-        parts.extend(app.drill.breadcrumb_parts());
-        format!(" {} {} ", icon, parts.join(" > "))
+    let size_text = match &ms.status {
+        ModuleStatus::Loading | ModuleStatus::Discovering => "calculating...".to_string(),
+        ModuleStatus::Error(e) => format!("Error: {}", e),
+        ModuleStatus::Ready => format_size_or_placeholder(ms.total_size),
     };
+    let title_text = format!(" {} {} \u{2014} {} ", icon, ms.module.name, size_text);
 
-    let lines = if !app.drill.is_active() {
-        vec![
-            Line::from(vec![Span::styled(title_text, app.theme.style_header())]),
-            Line::from(vec![Span::styled(
-                format!(" {}", ms.module.description),
-                app.theme.style_description(),
-            )]),
-        ]
-    } else {
-        vec![Line::from(vec![Span::styled(
-            title_text,
-            app.theme.style_header(),
-        )])]
-    };
+    let lines = vec![
+        Line::from(vec![Span::styled(title_text, app.theme.style_header())]),
+        Line::from(vec![Span::styled(
+            format!(" {}", ms.module.description),
+            app.theme.style_description(),
+        )]),
+    ];
 
     let title = Paragraph::new(lines).block(
         Block::default()
@@ -135,9 +110,8 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize)
 /// Group sorted item indices by target_description.
 /// Returns Vec of (description, item_indices) groups. Items within each group
 /// are already sorted by size descending. Groups are ordered by aggregate size descending.
-/// Only used at the root level (not when drilled in).
 fn grouped_item_indices(app: &App, module_idx: usize) -> Vec<(Option<String>, Vec<usize>)> {
-    let items = app.current_detail_items(module_idx);
+    let items = &app.modules[module_idx].items;
     let sorted = sorted_item_indices(app, module_idx);
 
     // Collect items into groups by target_description
@@ -166,43 +140,20 @@ fn grouped_item_indices(app: &App, module_idx: usize) -> Vec<(Option<String>, Ve
 }
 
 fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
-    let items = app.current_detail_items(module_idx);
-    let drilled = app.drill.is_active();
+    let items = &app.modules[module_idx].items;
     let ms = &app.modules[module_idx];
 
     if items.is_empty() {
-        let msg = if drilled {
-            "Empty directory."
-        } else {
-            match &ms.status {
-                ModuleStatus::Loading | ModuleStatus::Discovering => "Scanning for items...",
-                ModuleStatus::Error(_) => "Could not scan this module.",
-                ModuleStatus::Ready => "No items found.",
-            }
+        let msg = match &ms.status {
+            ModuleStatus::Loading | ModuleStatus::Discovering => "Scanning for items...",
+            ModuleStatus::Error(_) => "Could not scan this module.",
+            ModuleStatus::Ready => "No items found.",
         };
         let content = Paragraph::new(msg).style(app.theme.style_normal()).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(app.theme.style_border()),
         );
-        frame.render_widget(content, area);
-        return;
-    }
-
-    // When drilled in, show a loading indicator until all item sizes are known
-    if drilled && items.iter().any(|item| item.size.is_none()) {
-        let sized = items.iter().filter(|i| i.size.is_some()).count();
-        let total = items.len();
-        let spinner = SPINNER_CHARS[app.tick_count % SPINNER_CHARS.len()];
-        let loading_text = format!("{} Calculating sizes... {}/{}", spinner, sized, total);
-        let content = Paragraph::new(loading_text)
-            .style(app.theme.style_status_loading())
-            .alignment(ratatui::layout::Alignment::Center)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(app.theme.style_border()),
-            );
         frame.render_widget(content, area);
         return;
     }
@@ -247,21 +198,13 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
 
         let size_cell = match item.size {
             Some(size) => Cell::from(Span::styled(format_size(size), app.theme.style_size())),
-            None => {
-                if drilled {
-                    Cell::from(Span::styled(
-                        "calculating...",
-                        app.theme.style_status_loading(),
-                    ))
-                } else {
-                    match &ms.status {
-                        ModuleStatus::Loading | ModuleStatus::Discovering => Cell::from(
-                            Span::styled("calculating...", app.theme.style_status_loading()),
-                        ),
-                        _ => Cell::from(Span::styled("N/A \u{26a0}", app.theme.style_warning())),
-                    }
-                }
-            }
+            None => match &ms.status {
+                ModuleStatus::Loading | ModuleStatus::Discovering => Cell::from(Span::styled(
+                    "calculating...",
+                    app.theme.style_status_loading(),
+                )),
+                _ => Cell::from(Span::styled("N/A \u{26a0}", app.theme.style_warning())),
+            },
         };
 
         Row::new(vec![checkbox_cell, name_cell, size_cell])
@@ -296,7 +239,7 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
             }
         }
     } else {
-        // Flat rendering (single group or drilled in)
+        // Flat rendering (single group)
         for (pos, &item_idx) in display_order.iter().enumerate() {
             if pos == app.selected_index {
                 visual_selected = rows.len();
@@ -328,7 +271,7 @@ fn render_items_table(app: &App, frame: &mut Frame, area: Rect, module_idx: usiz
 
 fn render_description_pane(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
     let (display_order, _) = display_order_item_indices(app, module_idx);
-    let items = app.current_detail_items(module_idx);
+    let items = &app.modules[module_idx].items;
 
     let description = display_order
         .get(app.selected_index)
@@ -345,7 +288,7 @@ fn render_description_pane(app: &App, frame: &mut Frame, area: Rect, module_idx:
 
 fn render_path_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
     let (display_order, _) = display_order_item_indices(app, module_idx);
-    let items = app.current_detail_items(module_idx);
+    let items = &app.modules[module_idx].items;
 
     let path_text = display_order
         .get(app.selected_index)
@@ -370,7 +313,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, module_idx: usize
     } else if !app.filter_query.is_empty() {
         // Filter is set but not being edited
         let sorted = sorted_item_indices(app, module_idx);
-        let total = app.current_detail_items(module_idx).len();
+        let total = app.modules[module_idx].items.len();
         let shown = sorted.len();
         Line::from(vec![
             Span::styled(

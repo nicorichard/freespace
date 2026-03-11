@@ -53,6 +53,12 @@ pub struct App {
     pub drill: DrillState,
     /// Saved selected_index for the module list so we can restore it on back navigation.
     pub module_list_index: usize,
+    /// Saved selected_index for the flat view so we can restore it on back navigation.
+    pub flat_view_index: usize,
+    /// View to return to when the drill stack empties in FileBrowser.
+    pub browser_origin: View,
+    /// Module context for the browsed directory (needed for breadcrumb rendering).
+    pub browser_module_idx: usize,
     /// Total disk capacity in bytes (root filesystem).
     pub disk_total: Option<u64>,
     /// Free disk space in bytes (root filesystem).
@@ -121,6 +127,9 @@ impl App {
             pending_editor: None,
             drill: DrillState::new(),
             module_list_index: 0,
+            flat_view_index: 0,
+            browser_origin: View::ModuleList,
+            browser_module_idx: 0,
             disk_total,
             disk_free,
             dry_run,
@@ -341,12 +350,6 @@ impl App {
         }
     }
 
-    /// Return the items for the current detail view level.
-    /// If drilled in, returns the drill level's items; otherwise the module's items.
-    pub fn current_detail_items(&self, module_idx: usize) -> &[Item] {
-        self.drill.items_or(&self.modules[module_idx].items)
-    }
-
     /// List directory children as Items (instant, sizes are None).
     /// Applies safety classification to each entry and filters out denied paths.
     fn enumerate_directory(
@@ -461,6 +464,7 @@ impl App {
                 self.handle_key_info(key, idx);
             }
             View::FlatView => self.handle_key_flat_view(key),
+            View::FileBrowser => self.handle_key_file_browser(key),
         }
     }
 
@@ -693,48 +697,40 @@ impl App {
             // Toggle selection on highlighted item
             KeyCode::Char(' ') => {
                 if let Some(&item_idx) = display_order.get(self.selected_index) {
-                    let items = self.current_detail_items(module_idx);
-                    let path = items[item_idx].path.clone();
-                    let meta = (items[item_idx].size, items[item_idx].safety_level);
+                    let path = self.modules[module_idx].items[item_idx].path.clone();
                     if !self.selected_items.remove(&path) {
-                        // Selecting parent: prune any already-selected children
                         self.selected_items.retain(|p| !p.starts_with(&path));
-                        self.selected_items.insert(path.clone());
-                        self.drill.cache_selection(path, meta);
-                    } else {
-                        self.drill.uncache_selection(&path);
+                        self.selected_items.insert(path);
                     }
                 }
             }
             // Select all visible items
             KeyCode::Char('a') => {
-                let snapshot: Vec<_> = self
-                    .current_detail_items(module_idx)
+                let paths: Vec<PathBuf> = self.modules[module_idx]
+                    .items
                     .iter()
-                    .map(|item| (item.path.clone(), item.size, item.safety_level))
+                    .map(|item| item.path.clone())
                     .collect();
-                for (path, size, safety) in snapshot {
+                for path in paths {
                     self.selected_items.retain(|p| !p.starts_with(&path));
-                    self.selected_items.insert(path.clone());
-                    self.drill.cache_selection(path, (size, safety));
+                    self.selected_items.insert(path);
                 }
             }
             // Deselect all visible items
             KeyCode::Char('n') => {
-                let paths: Vec<PathBuf> = self
-                    .current_detail_items(module_idx)
+                let paths: Vec<PathBuf> = self.modules[module_idx]
+                    .items
                     .iter()
                     .map(|item| item.path.clone())
                     .collect();
                 for path in paths {
                     self.selected_items.remove(&path);
-                    self.drill.uncache_selection(&path);
                 }
             }
-            // Enter: drill into directory, or cleanup if at top level
+            // Enter: drill into directory via FileBrowser
             KeyCode::Enter => {
                 if let Some(&item_idx) = display_order.get(self.selected_index) {
-                    let items = self.current_detail_items(module_idx);
+                    let items = &self.modules[module_idx].items;
                     if matches!(items[item_idx].item_type, ItemType::Directory) {
                         let path = items[item_idx].path.clone();
                         let children = Self::enumerate_directory(
@@ -742,9 +738,11 @@ impl App {
                             &self.protected_paths,
                             self.enforce_scope,
                         );
-                        let parent_selected_index = self.selected_index;
-                        self.drill.push(path, children, parent_selected_index);
+                        self.browser_origin = View::ModuleDetail(module_idx);
+                        self.browser_module_idx = module_idx;
+                        self.drill.push(path, children, self.selected_index);
                         self.clear_filter();
+                        self.current_view = View::FileBrowser;
                         self.selected_index = 0;
                         let depth = self.drill.depth() - 1;
                         self.spawn_drill_size_scan(depth);
@@ -762,8 +760,7 @@ impl App {
             // Open in file manager
             KeyCode::Char('o') => {
                 if let Some(&item_idx) = display_order.get(self.selected_index) {
-                    let items = self.current_detail_items(module_idx);
-                    Self::open_in_file_manager(&items[item_idx].path);
+                    Self::open_in_file_manager(&self.modules[module_idx].items[item_idx].path);
                 }
             }
             // Open info overlay for this module
@@ -778,30 +775,22 @@ impl App {
                 self.filter_cursor = 0;
                 self.selected_index = 0;
             }
-            // Esc: clear filter → pop drill stack → go to ModuleList
+            // Esc: clear filter or go back to ModuleList
             KeyCode::Esc => {
                 if !self.filter_query.is_empty() {
                     self.clear_filter();
                     self.selected_index = 0;
-                } else if let Some(parent_idx) = self.drill.pop() {
-                    self.selected_index = parent_idx;
-                    self.clear_filter();
                 } else {
                     self.clear_filter();
                     self.current_view = View::ModuleList;
                     self.selected_index = self.module_list_index;
                 }
             }
-            // Backspace: pop drill stack if drilled in, else go back to module list
+            // Backspace: go back to module list
             KeyCode::Backspace => {
-                if let Some(parent_idx) = self.drill.pop() {
-                    self.selected_index = parent_idx;
-                    self.clear_filter();
-                } else {
-                    self.clear_filter();
-                    self.current_view = View::ModuleList;
-                    self.selected_index = self.module_list_index;
-                }
+                self.clear_filter();
+                self.current_view = View::ModuleList;
+                self.selected_index = self.module_list_index;
             }
             // Open help overlay
             KeyCode::Char('?') => {
@@ -857,7 +846,7 @@ impl App {
                     self.selected_items.remove(&path);
                 }
             }
-            // Enter: drill into directory
+            // Enter: drill into directory via FileBrowser
             KeyCode::Enter => {
                 if let Some(&(module_idx, item_idx)) = sorted.get(self.selected_index) {
                     let item = &self.modules[module_idx].items[item_idx];
@@ -868,8 +857,11 @@ impl App {
                             &self.protected_paths,
                             self.enforce_scope,
                         );
+                        self.browser_origin = View::FlatView;
+                        self.browser_module_idx = module_idx;
+                        self.flat_view_index = self.selected_index;
                         self.drill.push(path, children, 0);
-                        self.current_view = View::ModuleDetail(module_idx);
+                        self.current_view = View::FileBrowser;
                         self.clear_filter();
                         self.selected_index = 0;
                         let depth = self.drill.depth() - 1;
@@ -921,6 +913,166 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn handle_key_file_browser(&mut self, key: KeyCode) {
+        let sorted = views::file_browser::sorted_item_indices(self);
+        let count = sorted.len();
+
+        match key {
+            // Navigate
+            KeyCode::Char('j') | KeyCode::Down => {
+                if count > 0 {
+                    self.selected_index = (self.selected_index + 1) % count;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if count > 0 {
+                    self.selected_index = if self.selected_index == 0 {
+                        count - 1
+                    } else {
+                        self.selected_index - 1
+                    };
+                }
+            }
+            // Toggle selection
+            KeyCode::Char(' ') => {
+                if let Some(&item_idx) = sorted.get(self.selected_index) {
+                    let items = self.drill.current_items().unwrap();
+                    let path = items[item_idx].path.clone();
+                    let meta = (items[item_idx].size, items[item_idx].safety_level);
+                    if !self.selected_items.remove(&path) {
+                        self.selected_items.retain(|p| !p.starts_with(&path));
+                        self.selected_items.insert(path.clone());
+                        self.drill.cache_selection(path, meta);
+                    } else {
+                        self.drill.uncache_selection(&path);
+                    }
+                }
+            }
+            // Select all
+            KeyCode::Char('a') => {
+                if let Some(items) = self.drill.current_items() {
+                    let snapshot: Vec<_> = items
+                        .iter()
+                        .map(|item| (item.path.clone(), item.size, item.safety_level))
+                        .collect();
+                    for (path, size, safety) in snapshot {
+                        self.selected_items.retain(|p| !p.starts_with(&path));
+                        self.selected_items.insert(path.clone());
+                        self.drill.cache_selection(path, (size, safety));
+                    }
+                }
+            }
+            // Deselect all
+            KeyCode::Char('n') => {
+                if let Some(items) = self.drill.current_items() {
+                    let paths: Vec<PathBuf> = items.iter().map(|item| item.path.clone()).collect();
+                    for path in paths {
+                        self.selected_items.remove(&path);
+                        self.drill.uncache_selection(&path);
+                    }
+                }
+            }
+            // Enter: drill deeper into directory
+            KeyCode::Enter => {
+                if let Some(&item_idx) = sorted.get(self.selected_index) {
+                    let items = self.drill.current_items().unwrap();
+                    if matches!(items[item_idx].item_type, ItemType::Directory) {
+                        let path = items[item_idx].path.clone();
+                        let children = Self::enumerate_directory(
+                            &path,
+                            &self.protected_paths,
+                            self.enforce_scope,
+                        );
+                        let parent_selected_index = self.selected_index;
+                        self.drill.push(path, children, parent_selected_index);
+                        self.clear_filter();
+                        self.selected_index = 0;
+                        let depth = self.drill.depth() - 1;
+                        self.spawn_drill_size_scan(depth);
+                    }
+                }
+            }
+            // Cleanup
+            KeyCode::Char('c') => {
+                if !self.selected_items.is_empty() {
+                    self.previous_view = self.current_view;
+                    self.current_view = View::CleanupConfirm;
+                    self.selected_index = 0;
+                }
+            }
+            // Open in file manager
+            KeyCode::Char('o') => {
+                if let Some(&item_idx) = sorted.get(self.selected_index) {
+                    let items = self.drill.current_items().unwrap();
+                    Self::open_in_file_manager(&items[item_idx].path);
+                }
+            }
+            // Filter
+            KeyCode::Char('/') => {
+                self.filter_active = true;
+                self.filter_query.clear();
+                self.filter_cursor = 0;
+                self.selected_index = 0;
+            }
+            // Help
+            KeyCode::Char('?') => {
+                self.previous_view = self.current_view;
+                self.current_view = View::Help;
+            }
+            // Esc: clear filter → pop drill → return to origin
+            KeyCode::Esc => {
+                if !self.filter_query.is_empty() {
+                    self.clear_filter();
+                    self.selected_index = 0;
+                } else if let Some(parent_idx) = self.drill.pop() {
+                    self.clear_filter();
+                    if self.drill.is_active() {
+                        self.selected_index = parent_idx;
+                    } else {
+                        self.return_from_file_browser(parent_idx);
+                    }
+                } else {
+                    self.clear_filter();
+                    self.return_from_file_browser(0);
+                }
+            }
+            // Backspace: pop drill or return to origin
+            KeyCode::Backspace => {
+                if let Some(parent_idx) = self.drill.pop() {
+                    self.clear_filter();
+                    if self.drill.is_active() {
+                        self.selected_index = parent_idx;
+                    } else {
+                        self.return_from_file_browser(parent_idx);
+                    }
+                } else {
+                    self.clear_filter();
+                    self.return_from_file_browser(0);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Return from FileBrowser to the originating view, restoring the saved index.
+    /// `parent_idx` is the selected_index saved when the first drill level was pushed.
+    fn return_from_file_browser(&mut self, parent_idx: usize) {
+        match self.browser_origin {
+            View::FlatView => {
+                self.current_view = View::FlatView;
+                self.selected_index = self.flat_view_index;
+            }
+            View::ModuleDetail(idx) => {
+                self.current_view = View::ModuleDetail(idx);
+                self.selected_index = parent_idx;
+            }
+            _ => {
+                self.current_view = View::ModuleList;
+                self.selected_index = self.module_list_index;
+            }
         }
     }
 
@@ -1182,6 +1334,7 @@ impl App {
             View::Help => self.render_help(frame),
             View::Info(idx) => self.render_info(frame, *idx),
             View::FlatView => self.render_flat_view(frame),
+            View::FileBrowser => self.render_file_browser(frame),
         }
     }
 
@@ -1211,6 +1364,10 @@ impl App {
         views::flat_view::render(self, frame);
     }
 
+    fn render_file_browser(&self, frame: &mut ratatui::Frame) {
+        views::file_browser::render(self, frame);
+    }
+
     /// Build an App with controlled state for testing (no scanning, no config).
     #[cfg(test)]
     pub fn new_for_test(modules: Vec<ModuleState>) -> Self {
@@ -1234,6 +1391,9 @@ impl App {
             pending_editor: None,
             drill: DrillState::new(),
             module_list_index: 0,
+            flat_view_index: 0,
+            browser_origin: View::ModuleList,
+            browser_module_idx: 0,
             disk_total: None,
             disk_free: None,
             dry_run: false,
@@ -1287,6 +1447,7 @@ pub enum View {
     Help,
     Info(usize),
     FlatView,
+    FileBrowser,
 }
 
 /// State for a single loaded module including its discovered items.
@@ -1373,6 +1534,11 @@ impl DrillState {
         } else {
             fallback
         }
+    }
+
+    /// Return items at the current drill level, or None if not drilled in.
+    pub fn current_items(&self) -> Option<&[Item]> {
+        self.stack.last().map(|level| level.items.as_slice())
     }
 
     /// Push a new drill level (enter a directory).
