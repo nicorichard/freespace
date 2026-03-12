@@ -25,8 +25,8 @@ pub fn sorted_flat_items(app: &App) -> Vec<(usize, usize)> {
         for (ii, item) in ms.items.iter().enumerate() {
             if !app.filter_query.is_empty() {
                 // Match against item name OR module name
-                if !matches_filter(&item.name, &app.filter_query)
-                    && !matches_filter(&ms.module.name, &app.filter_query)
+                if !matches_filter(&item.name, &[], &app.filter_query)
+                    && !matches_filter(&ms.module.name, &ms.module.tags, &app.filter_query)
                 {
                     continue;
                 }
@@ -295,6 +295,7 @@ mod tests {
             description: "test".to_string(),
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
+            tags: vec![],
             targets: vec![Target {
                 paths: vec!["~/test".to_string()],
                 description: None,

@@ -4,6 +4,7 @@ version = "1.0.0"
 description = "A single test module"
 author = "tester"
 platforms = ["macos", "linux"]
+tags = ["cache"]
 
 [[targets]]
 path = "~/test-cache"

@@ -42,7 +42,13 @@ fn sort_modules(app: &App, indices: &mut [usize]) {
 /// during keyboard navigation and selection.
 pub fn sorted_module_indices(app: &App) -> Vec<usize> {
     let mut indices: Vec<usize> = (0..app.modules.len())
-        .filter(|&i| matches_filter(&app.modules[i].module.name, &app.filter_query))
+        .filter(|&i| {
+            matches_filter(
+                &app.modules[i].module.name,
+                &app.modules[i].module.tags,
+                &app.filter_query,
+            )
+        })
         .filter(|&i| app.modules[i].total_size != Some(0))
         .collect();
     sort_modules(app, &mut indices);
@@ -52,7 +58,13 @@ pub fn sorted_module_indices(app: &App) -> Vec<usize> {
 /// All module indices including 0 B — used for rendering the full list.
 fn all_sorted_module_indices(app: &App) -> Vec<usize> {
     let mut indices: Vec<usize> = (0..app.modules.len())
-        .filter(|&i| matches_filter(&app.modules[i].module.name, &app.filter_query))
+        .filter(|&i| {
+            matches_filter(
+                &app.modules[i].module.name,
+                &app.modules[i].module.tags,
+                &app.filter_query,
+            )
+        })
         .collect();
     sort_modules(app, &mut indices);
     indices
@@ -296,14 +308,29 @@ pub fn all_sorted_module_indices_for_test(app: &App) -> Vec<usize> {
 }
 
 fn render_description_pane(app: &App, frame: &mut Frame, area: Rect) {
-    let description = sorted_module_indices(app)
-        .get(app.selected_index)
-        .map(|&idx| app.modules[idx].module.description.as_str())
+    let selected = sorted_module_indices(app).get(app.selected_index).copied();
+    let description = selected
+        .map(|idx| app.modules[idx].module.description.as_str())
         .unwrap_or("");
-    let line = Line::from(Span::styled(
+    let mut spans = vec![Span::styled(
         format!(" {}", description),
         app.theme.style_description(),
-    ));
+    )];
+    if let Some(idx) = selected {
+        let tags = &app.modules[idx].module.tags;
+        if !tags.is_empty() {
+            let tag_text = tags
+                .iter()
+                .map(|t| format!("[{}]", t))
+                .collect::<Vec<_>>()
+                .join(" ");
+            spans.push(Span::styled(
+                format!("  {}", tag_text),
+                app.theme.style_border(),
+            ));
+        }
+    }
+    let line = Line::from(spans);
     frame.render_widget(Paragraph::new(line), area);
 }
 
@@ -363,6 +390,7 @@ mod tests {
             description: "test".to_string(),
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
+            tags: vec![],
             targets: vec![Target {
                 paths: vec!["~/test".to_string()],
                 description: None,
@@ -395,6 +423,7 @@ mod tests {
                 description: "test".to_string(),
                 author: "tester".to_string(),
                 platforms: vec!["macos".to_string()],
+                tags: vec![],
                 targets: vec![Target {
                     paths: vec!["~/x".to_string()],
                     description: None,
