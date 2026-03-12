@@ -588,6 +588,7 @@ path = "~/test"
             description: "Test".to_string(),
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
+            tags: vec![],
             targets: vec![],
         };
 
@@ -629,6 +630,7 @@ path = "~/test"
             description: "Test".to_string(),
             author: "tester".to_string(),
             platforms: vec![],
+            tags: vec![],
             targets: vec![],
         };
 

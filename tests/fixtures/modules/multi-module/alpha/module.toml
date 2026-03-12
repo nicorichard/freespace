@@ -4,6 +4,7 @@ version = "1.0.0"
 description = "Alpha test module"
 author = "tester"
 platforms = ["macos", "linux"]
+tags = ["cache", "devtools"]
 
 [[targets]]
 path = "~/alpha-cache"

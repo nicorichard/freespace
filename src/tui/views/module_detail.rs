@@ -17,7 +17,7 @@ use crate::tui::widgets::{
 pub fn sorted_item_indices(app: &App, module_idx: usize) -> Vec<usize> {
     let items = &app.modules[module_idx].items;
     let mut indices: Vec<usize> = (0..items.len())
-        .filter(|&i| matches_filter(&items[i].name, &app.filter_query))
+        .filter(|&i| matches_filter(&items[i].name, &[], &app.filter_query))
         .collect();
     indices.sort_by(|&a, &b| {
         let size_a = items[a].size;
@@ -357,6 +357,7 @@ mod tests {
             description: "test".to_string(),
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
+            tags: vec![],
             targets: vec![Target {
                 paths: vec!["~/test".to_string()],
                 description: None,
@@ -428,6 +429,7 @@ mod tests {
             description: "test".to_string(),
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
+            tags: vec![],
             targets: vec![],
         };
         let ms = ModuleState {

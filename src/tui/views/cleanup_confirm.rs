@@ -66,7 +66,7 @@ pub fn filtered_confirm_item_count(app: &App) -> usize {
     } else {
         items
             .iter()
-            .filter(|(name, _, _, _)| matches_filter(name, &app.filter_query))
+            .filter(|(name, _, _, _)| matches_filter(name, &[], &app.filter_query))
             .count()
     }
 }
@@ -90,7 +90,7 @@ pub fn render(app: &App, frame: &mut Frame) {
     } else {
         all_items
             .into_iter()
-            .filter(|(name, _, _, _)| matches_filter(name, &app.filter_query))
+            .filter(|(name, _, _, _)| matches_filter(name, &[], &app.filter_query))
             .collect()
     };
 
@@ -313,6 +313,7 @@ mod tests {
             description: "test".to_string(),
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
+            tags: vec![],
             targets: vec![Target {
                 paths: vec!["~/test".to_string()],
                 description: None,

@@ -405,6 +405,7 @@ mod tests {
             description: "test module".to_string(),
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
+            tags: vec![],
             targets: vec![crate::module::manifest::Target {
                 paths: vec![target_dir.to_str().unwrap().to_string()],
                 description: None,

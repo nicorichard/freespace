@@ -4,6 +4,7 @@ version = "1.0.0"
 description = "Module with local targets"
 author = "tester"
 platforms = ["macos", "linux"]
+tags = ["build-artifacts", "js"]
 
 [[targets]]
 path = "**/node_modules"

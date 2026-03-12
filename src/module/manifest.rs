@@ -15,6 +15,7 @@ pub struct Module {
     pub description: String,
     pub author: String,
     pub platforms: Vec<String>,
+    pub tags: Vec<String>,
     pub targets: Vec<Target>,
 }
 
@@ -27,6 +28,8 @@ struct RawModule {
     description: String,
     author: String,
     platforms: Vec<String>,
+    #[serde(default)]
+    tags: Vec<String>,
     targets: Vec<RawTarget>,
 }
 
@@ -79,6 +82,7 @@ impl Module {
             description: raw.description,
             author: raw.author,
             platforms: raw.platforms,
+            tags: raw.tags,
             targets,
         })
     }
@@ -401,6 +405,44 @@ mod tests {
         assert_eq!(module.targets[0].paths[0], "~/Library/Caches/a");
         assert_eq!(module.targets[0].paths[1], "~/Library/Caches/b");
         assert_eq!(module.targets[0].paths[2], "~/Library/Caches/c");
+    }
+
+    #[test]
+    fn parse_tags() {
+        let toml_str = r#"
+        id = "tagged"
+        name = "tagged"
+        version = "1.0.0"
+        description = "Tagged module"
+        author = "tester"
+        platforms = ["macos"]
+        tags = ["cache", "build-artifacts"]
+        targets = []
+        "#;
+        let module = Module::parse(toml_str).unwrap();
+        assert_eq!(module.tags, vec!["cache", "build-artifacts"]);
+    }
+
+    #[test]
+    fn parse_empty_tags() {
+        let toml_str = r#"
+        id = "empty-tags"
+        name = "empty-tags"
+        version = "1.0.0"
+        description = "Empty tags"
+        author = "tester"
+        platforms = ["macos"]
+        tags = []
+        targets = []
+        "#;
+        let module = Module::parse(toml_str).unwrap();
+        assert!(module.tags.is_empty());
+    }
+
+    #[test]
+    fn parse_missing_tags_defaults_to_empty() {
+        let module = Module::parse(valid_global_toml()).unwrap();
+        assert!(module.tags.is_empty());
     }
 
     #[test]

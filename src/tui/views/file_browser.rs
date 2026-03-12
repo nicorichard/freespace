@@ -25,7 +25,7 @@ pub fn sorted_item_indices(app: &App) -> Vec<usize> {
         None => return Vec::new(),
     };
     let mut indices: Vec<usize> = (0..items.len())
-        .filter(|&i| matches_filter(&items[i].name, &app.filter_query))
+        .filter(|&i| matches_filter(&items[i].name, &[], &app.filter_query))
         .collect();
     indices.sort_by(|&a, &b| {
         let size_a = items[a].size;
