@@ -16,7 +16,7 @@ fn make_global_module(name: &str, path: &str) -> Module {
         author: "tester".to_string(),
         platforms: vec!["macos".to_string(), "linux".to_string()],
         targets: vec![Target {
-            path: path.to_string(),
+            paths: vec![path.to_string()],
             description: None,
         }],
     }
@@ -31,7 +31,7 @@ fn make_local_module(name: &str, dir_name: &str) -> Module {
         author: "tester".to_string(),
         platforms: vec!["macos".to_string(), "linux".to_string()],
         targets: vec![Target {
-            path: format!("**/{}", dir_name),
+            paths: vec![format!("**/{}", dir_name)],
             description: None,
         }],
     }

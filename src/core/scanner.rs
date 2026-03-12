@@ -136,66 +136,68 @@ fn scan_module(
     let mut paths_to_size: Vec<(usize, PathBuf)> = Vec::new();
 
     for target in &module.targets {
-        if let Some(dir_name) = target.path.strip_prefix("**/") {
-            // Local target: recursive search for dir_name under search_dirs
-            let paths = discover_local_dirs(dir_name, search_dirs);
-            for path in paths {
-                let name = local_item_name(&path, dir_name);
+        for path_pattern in &target.paths {
+            if let Some(dir_name) = path_pattern.strip_prefix("**/") {
+                // Local target: recursive search for dir_name under search_dirs
+                let paths = discover_local_dirs(dir_name, search_dirs);
+                for path in paths {
+                    let name = local_item_name(&path, dir_name);
 
-                let item = Item {
-                    name,
-                    path: path.clone(),
-                    size: None,
-                    item_type: ItemType::Directory,
-                    target_description: target.description.clone(),
-                    safety_level: crate::core::safety::SafetyLevel::Safe,
-                    is_shared: false,
-                };
+                    let item = Item {
+                        name,
+                        path: path.clone(),
+                        size: None,
+                        item_type: ItemType::Directory,
+                        target_description: target.description.clone(),
+                        safety_level: crate::core::safety::SafetyLevel::Safe,
+                        is_shared: false,
+                    };
 
-                if tx
-                    .send(ScanMessage::ItemDiscovered { module_index, item })
-                    .is_err()
-                {
-                    return;
+                    if tx
+                        .send(ScanMessage::ItemDiscovered { module_index, item })
+                        .is_err()
+                    {
+                        return;
+                    }
+
+                    paths_to_size.push((item_index, path));
+                    item_index += 1;
                 }
+            } else {
+                // Global target: expand path pattern
+                let paths = expand_target_path(path_pattern);
+                for path in paths {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.display().to_string());
 
-                paths_to_size.push((item_index, path));
-                item_index += 1;
-            }
-        } else {
-            // Global target: expand path pattern
-            let paths = expand_target_path(&target.path);
-            for path in paths {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.display().to_string());
+                    let item_type = if path.is_dir() {
+                        ItemType::Directory
+                    } else {
+                        ItemType::File
+                    };
 
-                let item_type = if path.is_dir() {
-                    ItemType::Directory
-                } else {
-                    ItemType::File
-                };
+                    let item = Item {
+                        name,
+                        path: path.clone(),
+                        size: None,
+                        item_type,
+                        target_description: target.description.clone(),
+                        safety_level: crate::core::safety::SafetyLevel::Safe,
+                        is_shared: false,
+                    };
 
-                let item = Item {
-                    name,
-                    path: path.clone(),
-                    size: None,
-                    item_type,
-                    target_description: target.description.clone(),
-                    safety_level: crate::core::safety::SafetyLevel::Safe,
-                    is_shared: false,
-                };
+                    if tx
+                        .send(ScanMessage::ItemDiscovered { module_index, item })
+                        .is_err()
+                    {
+                        return;
+                    }
 
-                if tx
-                    .send(ScanMessage::ItemDiscovered { module_index, item })
-                    .is_err()
-                {
-                    return;
+                    paths_to_size.push((item_index, path));
+                    item_index += 1;
                 }
-
-                paths_to_size.push((item_index, path));
-                item_index += 1;
             }
         }
     }
@@ -404,7 +406,7 @@ mod tests {
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
             targets: vec![crate::module::manifest::Target {
-                path: target_dir.to_str().unwrap().to_string(),
+                paths: vec![target_dir.to_str().unwrap().to_string()],
                 description: None,
             }],
         };

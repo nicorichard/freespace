@@ -218,7 +218,7 @@ fn cmd_inspect(modules_dir: &std::path::Path, id: &str) -> anyhow::Result<()> {
     println!("Targets:");
     for target in &module.targets {
         let desc = target.description.as_deref().unwrap_or("(no description)");
-        println!("  {} - {}", target.path, desc);
+        println!("  {} - {}", target.paths.join(", "), desc);
     }
 
     if let Some(source) = module::installer::read_source_info(&module_dir) {

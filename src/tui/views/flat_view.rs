@@ -296,7 +296,7 @@ mod tests {
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
             targets: vec![Target {
-                path: "~/test".to_string(),
+                paths: vec!["~/test".to_string()],
                 description: None,
             }],
         };
