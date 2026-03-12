@@ -6,7 +6,7 @@ use serde::Deserialize;
 use crate::core::safety;
 
 /// Represents a parsed module manifest (module.toml).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct Module {
     pub id: String,
@@ -18,15 +18,69 @@ pub struct Module {
     pub targets: Vec<Target>,
 }
 
+/// Raw deserialization struct for TOML parsing.
+#[derive(Debug, Deserialize)]
+struct RawModule {
+    id: String,
+    name: String,
+    version: String,
+    description: String,
+    author: String,
+    platforms: Vec<String>,
+    targets: Vec<RawTarget>,
+}
+
+/// Intermediate target struct for TOML deserialization.
+#[derive(Debug, Deserialize)]
+struct RawTarget {
+    path: Option<String>,
+    paths: Option<Vec<String>>,
+    description: Option<String>,
+}
+
 impl Module {
     /// Deserialize from a TOML string and validate.
     pub fn parse(toml_str: &str) -> Result<Module> {
-        let module: Module = toml::from_str(toml_str)?;
-        validate_id(&module.id)?;
-        for target in &module.targets {
-            safety::validate_target_pattern(&target.path)?;
+        let raw: RawModule = toml::from_str(toml_str)?;
+        validate_id(&raw.id)?;
+
+        let mut targets = Vec::with_capacity(raw.targets.len());
+        for raw_target in raw.targets {
+            let paths = match (raw_target.path, raw_target.paths) {
+                (Some(p), None) => vec![p],
+                (None, Some(ps)) => {
+                    if ps.is_empty() {
+                        bail!("target paths array must not be empty");
+                    }
+                    ps
+                }
+                (Some(_), Some(_)) => {
+                    bail!("target must specify either 'path' or 'paths', not both");
+                }
+                (None, None) => {
+                    bail!("target must specify either 'path' or 'paths'");
+                }
+            };
+
+            for p in &paths {
+                safety::validate_target_pattern(p)?;
+            }
+
+            targets.push(Target {
+                paths,
+                description: raw_target.description,
+            });
         }
-        Ok(module)
+
+        Ok(Module {
+            id: raw.id,
+            name: raw.name,
+            version: raw.version,
+            description: raw.description,
+            author: raw.author,
+            platforms: raw.platforms,
+            targets,
+        })
     }
 }
 
@@ -52,12 +106,12 @@ fn validate_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-/// A target that a module scans. Uses `path` for fixed paths (supports `~` and
-/// glob `*`) or `**/dirname` for recursive local search across search directories.
-#[derive(Debug, Clone, Deserialize)]
+/// A target that a module scans. Each entry in `paths` is either a fixed path
+/// (supports `~` and glob `*`) or `**/dirname` for recursive local search.
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct Target {
-    pub path: String,
+    pub paths: Vec<String>,
     pub description: Option<String>,
 }
 
@@ -87,7 +141,7 @@ mod tests {
         assert_eq!(module.name, "test-module");
         assert_eq!(module.version, "1.0.0");
         assert_eq!(module.targets.len(), 1);
-        assert_eq!(module.targets[0].path, "~/Library/Caches/test");
+        assert_eq!(module.targets[0].paths, vec!["~/Library/Caches/test"]);
     }
 
     #[test]
@@ -105,7 +159,7 @@ mod tests {
         description = "Node dependencies"
         "#;
         let module = Module::parse(toml_str).unwrap();
-        assert_eq!(module.targets[0].path, "**/node_modules");
+        assert_eq!(module.targets[0].paths, vec!["**/node_modules"]);
     }
 
     #[test]
@@ -228,6 +282,125 @@ mod tests {
         "#;
         let err = Module::parse(toml_str).unwrap_err();
         assert!(err.to_string().contains(".."));
+    }
+
+    // --- multi-path tests ---
+
+    #[test]
+    fn parse_paths_array() {
+        let toml_str = r#"
+        id = "multi-path"
+        name = "multi-path"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+
+        [[targets]]
+        paths = ["~/Library/Caches/foo", "~/Library/Caches/bar"]
+        description = "Multiple caches"
+        "#;
+        let module = Module::parse(toml_str).unwrap();
+        assert_eq!(module.targets.len(), 1);
+        assert_eq!(
+            module.targets[0].paths,
+            vec!["~/Library/Caches/foo", "~/Library/Caches/bar"]
+        );
+    }
+
+    #[test]
+    fn parse_single_path_backward_compat() {
+        let module = Module::parse(valid_global_toml()).unwrap();
+        assert_eq!(module.targets[0].paths, vec!["~/Library/Caches/test"]);
+    }
+
+    #[test]
+    fn parse_rejects_both_path_and_paths() {
+        let toml_str = r#"
+        id = "both"
+        name = "both"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+
+        [[targets]]
+        path = "~/foo"
+        paths = ["~/bar"]
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains("not both"));
+    }
+
+    #[test]
+    fn parse_rejects_neither_path_nor_paths() {
+        let toml_str = r#"
+        id = "neither"
+        name = "neither"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+
+        [[targets]]
+        description = "no path at all"
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains("either"));
+    }
+
+    #[test]
+    fn parse_rejects_empty_paths_array() {
+        let toml_str = r#"
+        id = "empty-paths"
+        name = "empty-paths"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+
+        [[targets]]
+        paths = []
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn parse_rejects_traversal_in_paths_array() {
+        let toml_str = r#"
+        id = "evil-paths"
+        name = "evil-paths"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+
+        [[targets]]
+        paths = ["~/Library/Caches/ok", "~/Library/../../../etc/passwd"]
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains(".."));
+    }
+
+    #[test]
+    fn parse_multiple_valid_paths() {
+        let toml_str = r#"
+        id = "multi"
+        name = "multi"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+
+        [[targets]]
+        paths = ["~/Library/Caches/a", "~/Library/Caches/b", "~/Library/Caches/c"]
+        "#;
+        let module = Module::parse(toml_str).unwrap();
+        assert_eq!(module.targets[0].paths.len(), 3);
+        assert_eq!(module.targets[0].paths[0], "~/Library/Caches/a");
+        assert_eq!(module.targets[0].paths[1], "~/Library/Caches/b");
+        assert_eq!(module.targets[0].paths[2], "~/Library/Caches/c");
     }
 
     #[test]
