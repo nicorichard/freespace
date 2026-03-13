@@ -276,49 +276,66 @@ fn check_git_available() -> Result<(), InstallError> {
 }
 
 /// Clone a repository to a temporary directory. Returns (temp_dir_path, commit_sha).
+///
+/// Tries each URL from `clone_urls()` in order (HTTPS first, SSH fallback).
 fn clone_repo(source: &SourceIdentifier) -> Result<(PathBuf, String), InstallError> {
-    let clone_url = source
-        .clone_url()
-        .ok_or_else(|| InstallError::CloneFailed("not a GitHub source".to_string()))?;
+    let urls = source.clone_urls();
+    if urls.is_empty() {
+        return Err(InstallError::CloneFailed("not a GitHub source".to_string()));
+    }
 
     let dir_name = source.default_dir_name();
     let temp_dir = std::env::temp_dir().join(format!("freespace-install-{}", dir_name));
 
-    // Clean up any previous temp dir
-    if temp_dir.exists() {
-        let _ = fs::remove_dir_all(&temp_dir);
+    let mut last_error = None;
+
+    for url in &urls {
+        // Clean up any previous temp dir
+        if temp_dir.exists() {
+            let _ = fs::remove_dir_all(&temp_dir);
+        }
+
+        let mut cmd = Command::new("git");
+        cmd.arg("clone").arg("--depth").arg("1");
+
+        if let Some(git_ref) = source.git_ref() {
+            cmd.arg("--branch").arg(git_ref);
+        }
+
+        cmd.arg(url).arg(&temp_dir);
+
+        let output = match cmd.output() {
+            Ok(o) => o,
+            Err(e) => {
+                last_error = Some(InstallError::CloneFailed(format!(
+                    "failed to run git: {}",
+                    e
+                )));
+                continue;
+            }
+        };
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            last_error = Some(InstallError::CloneFailed(stderr.trim().to_string()));
+            continue;
+        }
+
+        // Clone succeeded — get commit SHA
+        let rev_output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&temp_dir)
+            .output()
+            .map_err(|e| InstallError::CloneFailed(format!("failed to get commit SHA: {}", e)))?;
+
+        let commit_sha = String::from_utf8_lossy(&rev_output.stdout)
+            .trim()
+            .to_string();
+
+        return Ok((temp_dir, commit_sha));
     }
 
-    let mut cmd = Command::new("git");
-    cmd.arg("clone").arg("--depth").arg("1");
-
-    if let Some(git_ref) = source.git_ref() {
-        cmd.arg("--branch").arg(git_ref);
-    }
-
-    cmd.arg(clone_url).arg(&temp_dir);
-
-    let output = cmd
-        .output()
-        .map_err(|e| InstallError::CloneFailed(format!("failed to run git: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(InstallError::CloneFailed(stderr.trim().to_string()));
-    }
-
-    // Get commit SHA
-    let rev_output = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(&temp_dir)
-        .output()
-        .map_err(|e| InstallError::CloneFailed(format!("failed to get commit SHA: {}", e)))?;
-
-    let commit_sha = String::from_utf8_lossy(&rev_output.stdout)
-        .trim()
-        .to_string();
-
-    Ok((temp_dir, commit_sha))
+    Err(last_error.unwrap_or_else(|| InstallError::CloneFailed("all clone URLs failed".into())))
 }
 
 /// Detect whether a directory is a single-module or multi-module layout.
