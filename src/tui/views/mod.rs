@@ -1,4 +1,5 @@
 pub mod cleanup_confirm;
+pub mod cleanup_progress;
 pub mod file_browser;
 pub mod flat_view;
 pub mod help;

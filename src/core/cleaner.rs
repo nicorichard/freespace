@@ -1,9 +1,24 @@
 // File and directory cleanup operations.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use tokio::sync::mpsc;
 
 use crate::core::audit;
 use crate::core::safety;
+
+/// Messages sent from background cleanup task to the UI.
+pub enum CleanupMessage {
+    /// One item has been processed (success or failure).
+    Progress {
+        done: usize,
+        total: usize,
+        path: PathBuf,
+    },
+    /// The entire cleanup operation has finished (or was cancelled).
+    Complete(CleanupResult),
+}
 
 /// Options controlling cleanup behavior.
 pub struct CleanupOptions {
@@ -37,73 +52,102 @@ pub struct CleanupResult {
 }
 
 /// Move the given files and directories to the system trash, returning which succeeded and which failed.
-pub fn trash_items(paths: &[PathBuf], opts: &CleanupOptions) -> CleanupResult {
+///
+/// Checks `cancel` between each item and stops early if set.
+/// Sends `CleanupMessage::Progress` after each item and `CleanupMessage::Complete` when done.
+pub fn trash_items(
+    paths: &[PathBuf],
+    opts: &CleanupOptions,
+    cancel: &AtomicBool,
+    progress_tx: &mpsc::UnboundedSender<CleanupMessage>,
+) -> CleanupResult {
     let mut result = CleanupResult {
         succeeded: Vec::new(),
         failed: Vec::new(),
     };
+    let total = paths.len();
 
-    for path in paths {
+    for (i, path) in paths.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+
         if let Some(reason) = check_safety(path, opts) {
             result.failed.push((path.clone(), reason));
-            continue;
-        }
-
-        if opts.dry_run {
+        } else if opts.dry_run {
             result.succeeded.push(path.clone());
-            continue;
+        } else {
+            match trash::delete(path) {
+                Ok(()) => {
+                    if opts.audit_log {
+                        audit::log_operation("TRASH", path, None, &opts.module_id);
+                    }
+                    result.succeeded.push(path.clone());
+                }
+                Err(e) => result.failed.push((path.clone(), e.to_string())),
+            }
         }
 
-        match trash::delete(path) {
-            Ok(()) => {
-                if opts.audit_log {
-                    audit::log_operation("TRASH", path, None, &opts.module_id);
-                }
-                result.succeeded.push(path.clone());
-            }
-            Err(e) => result.failed.push((path.clone(), e.to_string())),
-        }
+        let _ = progress_tx.send(CleanupMessage::Progress {
+            done: i + 1,
+            total,
+            path: path.clone(),
+        });
     }
 
     result
 }
 
 /// Delete the given files and directories, returning which succeeded and which failed.
-pub fn delete_items(paths: &[PathBuf], opts: &CleanupOptions) -> CleanupResult {
+///
+/// Checks `cancel` between each item and stops early if set.
+/// Sends `CleanupMessage::Progress` after each item and `CleanupMessage::Complete` when done.
+pub fn delete_items(
+    paths: &[PathBuf],
+    opts: &CleanupOptions,
+    cancel: &AtomicBool,
+    progress_tx: &mpsc::UnboundedSender<CleanupMessage>,
+) -> CleanupResult {
     let mut result = CleanupResult {
         succeeded: Vec::new(),
         failed: Vec::new(),
     };
+    let total = paths.len();
 
-    for path in paths {
+    for (i, path) in paths.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+
         if let Some(reason) = check_safety(path, opts) {
             result.failed.push((path.clone(), reason));
-            continue;
-        }
-
-        if opts.dry_run {
+        } else if opts.dry_run {
             result.succeeded.push(path.clone());
-            continue;
-        }
-
-        let res = if safety::is_symlink(path) {
-            // Remove just the symlink itself (unlink), never follow into target
-            std::fs::remove_file(path)
-        } else if path.is_dir() {
-            std::fs::remove_dir_all(path)
         } else {
-            std::fs::remove_file(path)
-        };
+            let res = if safety::is_symlink(path) {
+                std::fs::remove_file(path)
+            } else if path.is_dir() {
+                std::fs::remove_dir_all(path)
+            } else {
+                std::fs::remove_file(path)
+            };
 
-        match res {
-            Ok(()) => {
-                if opts.audit_log {
-                    audit::log_operation("DELETE", path, None, &opts.module_id);
+            match res {
+                Ok(()) => {
+                    if opts.audit_log {
+                        audit::log_operation("DELETE", path, None, &opts.module_id);
+                    }
+                    result.succeeded.push(path.clone());
                 }
-                result.succeeded.push(path.clone());
+                Err(e) => result.failed.push((path.clone(), e.to_string())),
             }
-            Err(e) => result.failed.push((path.clone(), e.to_string())),
         }
+
+        let _ = progress_tx.send(CleanupMessage::Progress {
+            done: i + 1,
+            total,
+            path: path.clone(),
+        });
     }
 
     result
@@ -129,6 +173,7 @@ fn check_safety(path: &Path, opts: &CleanupOptions) -> Option<String> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     fn default_opts() -> CleanupOptions {
@@ -139,6 +184,15 @@ mod tests {
         }
     }
 
+    fn no_cancel() -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(false))
+    }
+
+    fn test_tx() -> mpsc::UnboundedSender<CleanupMessage> {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        tx
+    }
+
     #[test]
     fn delete_file() {
         let tmp = TempDir::new().unwrap();
@@ -146,7 +200,7 @@ mod tests {
         fs::write(&file, "data").unwrap();
         assert!(file.exists());
 
-        let result = delete_items(&[file.clone()], &default_opts());
+        let result = delete_items(&[file.clone()], &default_opts(), &no_cancel(), &test_tx());
         assert_eq!(result.succeeded.len(), 1);
         assert!(result.failed.is_empty());
         assert!(!file.exists());
@@ -159,7 +213,7 @@ mod tests {
         fs::create_dir(&dir).unwrap();
         fs::write(dir.join("inner.txt"), "data").unwrap();
 
-        let result = delete_items(&[dir.clone()], &default_opts());
+        let result = delete_items(&[dir.clone()], &default_opts(), &no_cancel(), &test_tx());
         assert_eq!(result.succeeded.len(), 1);
         assert!(!dir.exists());
     }
@@ -169,8 +223,9 @@ mod tests {
         let result = delete_items(
             &[PathBuf::from("/nonexistent/path/xyz123")],
             &default_opts(),
+            &no_cancel(),
+            &test_tx(),
         );
-        // Should be blocked by safety (outside home) or by nonexistence
         assert!(result.succeeded.is_empty());
         assert_eq!(result.failed.len(), 1);
     }
@@ -182,8 +237,12 @@ mod tests {
         fs::write(&file, "data").unwrap();
         let missing = PathBuf::from("/nonexistent/path/xyz123");
 
-        let result = delete_items(&[file.clone(), missing], &default_opts());
-        // file succeeds, missing fails (blocked by safety or not found)
+        let result = delete_items(
+            &[file.clone(), missing],
+            &default_opts(),
+            &no_cancel(),
+            &test_tx(),
+        );
         assert_eq!(result.succeeded.len(), 1);
         assert_eq!(result.failed.len(), 1);
     }
@@ -194,7 +253,7 @@ mod tests {
         let file = tmp.path().join("trashme.txt");
         fs::write(&file, "data").unwrap();
 
-        let result = trash_items(&[file.clone()], &default_opts());
+        let result = trash_items(&[file.clone()], &default_opts(), &no_cancel(), &test_tx());
         assert_eq!(result.succeeded.len(), 1);
         assert!(result.failed.is_empty());
         assert!(!file.exists());
@@ -205,6 +264,8 @@ mod tests {
         let result = trash_items(
             &[PathBuf::from("/nonexistent/path/xyz123")],
             &default_opts(),
+            &no_cancel(),
+            &test_tx(),
         );
         assert!(result.succeeded.is_empty());
         assert_eq!(result.failed.len(), 1);
@@ -222,7 +283,7 @@ mod tests {
             enforce_scope: false,
             ..CleanupOptions::default()
         };
-        let result = delete_items(&[file.clone()], &opts);
+        let result = delete_items(&[file.clone()], &opts, &no_cancel(), &test_tx());
         assert_eq!(result.succeeded.len(), 1);
         assert!(file.exists(), "file should still exist in dry-run mode");
     }
@@ -239,7 +300,7 @@ mod tests {
             enforce_scope: false,
             ..CleanupOptions::default()
         };
-        let result = trash_items(&[file.clone()], &opts);
+        let result = trash_items(&[file.clone()], &opts, &no_cancel(), &test_tx());
         assert_eq!(result.succeeded.len(), 1);
         assert!(file.exists(), "file should still exist in dry-run mode");
     }
@@ -256,7 +317,7 @@ mod tests {
             enforce_scope: false,
             ..CleanupOptions::default()
         };
-        let result = delete_items(&[file.clone()], &opts);
+        let result = delete_items(&[file.clone()], &opts, &no_cancel(), &test_tx());
         assert!(result.succeeded.is_empty());
         assert_eq!(result.failed.len(), 1);
         assert!(result.failed[0].1.contains("blocked by safety rule"));
@@ -274,7 +335,7 @@ mod tests {
         let link = tmp.path().join("link_dir");
         std::os::unix::fs::symlink(&target_dir, &link).unwrap();
 
-        let result = delete_items(&[link.clone()], &default_opts());
+        let result = delete_items(&[link.clone()], &default_opts(), &no_cancel(), &test_tx());
         assert_eq!(result.succeeded.len(), 1);
         assert!(!link.exists(), "symlink should be removed");
         assert!(target_dir.exists(), "target directory should still exist");
@@ -287,7 +348,6 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn warn_tier_blocked_without_allow() {
-        // /Library paths are warn-tier; without allow_warned they should be blocked
         let opts = CleanupOptions {
             audit_log: false,
             enforce_scope: false,
@@ -302,7 +362,6 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn warn_tier_allowed_with_flag() {
-        // /Library paths should pass through when allow_warned is true
         let opts = CleanupOptions {
             audit_log: false,
             enforce_scope: false,
@@ -315,7 +374,6 @@ mod tests {
 
     #[test]
     fn deny_tier_always_blocked() {
-        // /usr paths are deny-tier regardless of allow_warned
         let opts = CleanupOptions {
             audit_log: false,
             enforce_scope: false,
@@ -325,5 +383,39 @@ mod tests {
         let result = check_safety(Path::new("/usr/bin/ls"), &opts);
         assert!(result.is_some());
         assert!(result.unwrap().contains("blocked by safety rule"));
+    }
+
+    #[test]
+    fn cancel_stops_early() {
+        let tmp = TempDir::new().unwrap();
+        let f1 = tmp.path().join("a.txt");
+        let f2 = tmp.path().join("b.txt");
+        let f3 = tmp.path().join("c.txt");
+        fs::write(&f1, "a").unwrap();
+        fs::write(&f2, "b").unwrap();
+        fs::write(&f3, "c").unwrap();
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        // Pre-set cancel so it stops before processing any items
+        cancel.store(true, Ordering::Relaxed);
+
+        let result = delete_items(
+            &[f1.clone(), f2.clone(), f3.clone()],
+            &default_opts(),
+            &cancel,
+            &tx,
+        );
+
+        // Nothing should have been processed
+        assert!(result.succeeded.is_empty());
+        assert!(result.failed.is_empty());
+        assert!(f1.exists());
+        assert!(f2.exists());
+        assert!(f3.exists());
+
+        // No progress messages sent
+        assert!(rx.try_recv().is_err());
     }
 }
