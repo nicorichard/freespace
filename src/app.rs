@@ -3,13 +3,15 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use tokio::sync::mpsc;
 
 use crate::config::AppConfig;
-use crate::core::cleaner::{self, CleanupOptions};
+use crate::core::cleaner::{self, CleanupMessage, CleanupOptions};
 use crate::core::safety;
 use crate::core::scanner::{self, ScanMessage};
 use crate::module::manager;
@@ -81,6 +83,26 @@ pub struct App {
     seen_paths: HashSet<PathBuf>,
     /// Accurate global total counting each unique path once across modules.
     pub deduped_total: u64,
+    /// Receiver for cleanup progress messages from the background task.
+    cleanup_rx: Option<mpsc::UnboundedReceiver<CleanupMessage>>,
+    /// Cancel token for the in-progress cleanup task.
+    cleanup_cancel: Option<Arc<AtomicBool>>,
+    /// Progress state for the cleanup-in-progress view.
+    pub cleanup_progress: Option<CleanupProgressState>,
+}
+
+/// Tracks the state of a background cleanup operation for rendering.
+pub struct CleanupProgressState {
+    /// Total number of items to process.
+    pub total: usize,
+    /// Number of items processed so far.
+    pub done: usize,
+    /// Path of the most recently processed item.
+    pub current_path: Option<String>,
+    /// Whether the operation is permanent delete (true) or trash (false).
+    pub permanent: bool,
+    /// Whether the user has requested to halt (pressed q/Ctrl+C).
+    pub halted: bool,
 }
 
 impl App {
@@ -141,6 +163,9 @@ impl App {
             blocked_paths: Vec::new(),
             seen_paths: HashSet::new(),
             deduped_total: 0,
+            cleanup_rx: None,
+            cleanup_cancel: None,
+            cleanup_progress: None,
         }
     }
 
@@ -246,6 +271,9 @@ impl App {
 
             // Process any pending scan messages (non-blocking)
             self.process_scan_messages();
+
+            // Process any pending cleanup messages (non-blocking)
+            self.process_cleanup_messages();
 
             // Increment tick counter for spinner animation
             self.tick_count = self.tick_count.wrapping_add(1);
@@ -427,9 +455,13 @@ impl App {
 
     /// Dispatch key events based on the current view.
     pub fn handle_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
-        // Ctrl+C always quits, even during filter input
+        // Ctrl+C: during cleanup progress, halt or quit; otherwise always quit
         if key == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
-            self.should_quit = true;
+            if matches!(self.current_view, View::CleanupProgress) {
+                self.handle_key_cleanup_progress(KeyCode::Char('q'));
+            } else {
+                self.should_quit = true;
+            }
             return;
         }
 
@@ -448,8 +480,11 @@ impl App {
             }
         }
 
-        // Global: q quits from any view (but not during filter input)
-        if key == KeyCode::Char('q') && !self.filter_active {
+        // Global: q quits from any view (but not during filter input or cleanup progress)
+        if key == KeyCode::Char('q')
+            && !self.filter_active
+            && !matches!(self.current_view, View::CleanupProgress)
+        {
             self.should_quit = true;
             return;
         }
@@ -458,6 +493,7 @@ impl App {
             View::ModuleList => self.handle_key_module_list(key),
             View::ModuleDetail(_) => self.handle_key_module_detail(key),
             View::CleanupConfirm => self.handle_key_cleanup_confirm(key),
+            View::CleanupProgress => self.handle_key_cleanup_progress(key),
             View::Help => self.handle_key_help(key),
             View::Info(idx) => {
                 let idx = *idx;
@@ -1098,17 +1134,11 @@ impl App {
             }
             // Move to trash (reversible)
             KeyCode::Char('t') => {
-                self.perform_cleanup(false);
-                self.clear_filter();
-                self.current_view = self.previous_view;
-                self.selected_index = 0;
+                self.start_cleanup(false);
             }
             // Permanently delete
             KeyCode::Char('d') => {
-                self.perform_cleanup(true);
-                self.clear_filter();
-                self.current_view = self.previous_view;
-                self.selected_index = 0;
+                self.start_cleanup(true);
             }
             // Cancel and return to previous view
             KeyCode::Char('n') => {
@@ -1137,10 +1167,40 @@ impl App {
         }
     }
 
-    /// Perform live cleanup: delete selected items and update module state.
-    /// When `permanent` is true, items are permanently deleted; otherwise they are moved to trash.
-    fn perform_cleanup(&mut self, permanent: bool) {
-        let paths: Vec<std::path::PathBuf> = self.selected_items.iter().cloned().collect();
+    /// Handle keys during the cleanup-in-progress view.
+    fn handle_key_cleanup_progress(&mut self, key: KeyCode) {
+        let halted = self.cleanup_progress.as_ref().is_some_and(|p| p.halted);
+
+        if halted {
+            // Already halted: q quits, anything else goes back to previous view
+            match key {
+                KeyCode::Char('q') => {
+                    self.should_quit = true;
+                }
+                _ => {
+                    self.finish_cleanup();
+                }
+            }
+        } else {
+            // Cleanup in progress: q/Ctrl+C/Esc halts
+            if matches!(key, KeyCode::Char('q') | KeyCode::Esc) {
+                if let Some(cancel) = &self.cleanup_cancel {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+                if let Some(progress) = &mut self.cleanup_progress {
+                    progress.halted = true;
+                }
+            }
+        }
+    }
+
+    /// Spawn cleanup as a background blocking task, transitioning to CleanupProgress view.
+    fn start_cleanup(&mut self, permanent: bool) {
+        let paths: Vec<PathBuf> = self.selected_items.iter().cloned().collect();
+        let total = paths.len();
+        if total == 0 {
+            return;
+        }
 
         let opts = CleanupOptions {
             dry_run: self.dry_run,
@@ -1148,17 +1208,84 @@ impl App {
             module_id: String::new(),
             audit_log: self.audit_log,
             enforce_scope: self.enforce_scope,
-            allow_warned: true, // user confirmed via cleanup dialog
+            allow_warned: true,
         };
 
-        let result = if permanent {
-            cleaner::delete_items(&paths, &opts)
+        let (tx, rx) = mpsc::unbounded_channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_clone = cancel.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let result = if permanent {
+                cleaner::delete_items(&paths, &opts, &cancel_clone, &tx)
+            } else {
+                cleaner::trash_items(&paths, &opts, &cancel_clone, &tx)
+            };
+            let _ = tx.send(CleanupMessage::Complete(result));
+        });
+
+        self.cleanup_rx = Some(rx);
+        self.cleanup_cancel = Some(cancel);
+        self.cleanup_progress = Some(CleanupProgressState {
+            total,
+            done: 0,
+            current_path: None,
+            permanent,
+            halted: false,
+        });
+
+        self.clear_filter();
+        self.current_view = View::CleanupProgress;
+    }
+
+    /// Process cleanup messages from the background task.
+    fn process_cleanup_messages(&mut self) {
+        // Take rx out of self to avoid borrow conflicts when calling other &mut self methods.
+        let mut rx = match self.cleanup_rx.take() {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        let mut completed_result = None;
+
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                CleanupMessage::Progress { done, total, path } => {
+                    if let Some(progress) = &mut self.cleanup_progress {
+                        progress.done = done;
+                        progress.total = total;
+                        progress.current_path = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .or_else(|| Some(path.display().to_string()));
+                    }
+                }
+                CleanupMessage::Complete(result) => {
+                    completed_result = Some(result);
+                }
+            }
+        }
+
+        if let Some(result) = completed_result {
+            self.apply_cleanup_result(result);
+
+            let halted = self.cleanup_progress.as_ref().is_some_and(|p| p.halted);
+            if !halted {
+                self.finish_cleanup();
+            }
+            // If halted, stay in CleanupProgress view for the confirmation.
+            // Don't put rx back — cleanup is done.
         } else {
-            cleaner::trash_items(&paths, &opts)
-        };
+            // Cleanup still in progress, put rx back.
+            self.cleanup_rx = Some(rx);
+        }
+    }
 
-        // Remove successfully deleted items from module state
+    /// Apply a cleanup result to module state and set flash messages.
+    fn apply_cleanup_result(&mut self, result: cleaner::CleanupResult) {
         let succeeded: HashSet<PathBuf> = result.succeeded.into_iter().collect();
+        let failed_count = result.failed.len();
+        let total_count = succeeded.len() + failed_count;
 
         // Collect drill item sizes before clearing drill state
         let drill_item_sizes = self.drill.collect_item_sizes();
@@ -1166,7 +1293,6 @@ impl App {
         for ms in &mut self.modules {
             ms.items.retain(|item| !succeeded.contains(&item.path));
 
-            // Update parent module items for deleted drill children
             for item in &mut ms.items {
                 for deleted_path in &succeeded {
                     if deleted_path.starts_with(&item.path) && deleted_path != &item.path {
@@ -1179,7 +1305,6 @@ impl App {
                 }
             }
 
-            // Recalculate total size from remaining items
             let total: u64 = ms.items.iter().filter_map(|i| i.size).sum();
             ms.total_size = if ms.items.is_empty() {
                 Some(0)
@@ -1188,9 +1313,7 @@ impl App {
             };
         }
 
-        // Show flash message for failures
-        let failed_count = result.failed.len();
-        let total_count = paths.len();
+        // Flash message for failures
         if failed_count > 0 && failed_count == total_count {
             self.set_flash(
                 format!(
@@ -1211,15 +1334,19 @@ impl App {
             );
         }
 
-        // Recalculate deduped_total and seen_paths from scratch
         self.recalculate_dedup();
-
-        // Clear drill state and selected items
         self.drill.clear();
         self.selected_items.clear();
-
-        // Refresh disk stats after cleanup
         self.refresh_disk_stats();
+    }
+
+    /// Finalize cleanup view: clear state and return to previous view.
+    fn finish_cleanup(&mut self) {
+        self.cleanup_rx = None;
+        self.cleanup_cancel = None;
+        self.cleanup_progress = None;
+        self.current_view = self.previous_view;
+        self.selected_index = 0;
     }
 
     /// Recalculate dedup state from all module items (e.g. after cleanup).
@@ -1331,6 +1458,7 @@ impl App {
             View::ModuleList => self.render_module_list(frame),
             View::ModuleDetail(idx) => self.render_module_detail(frame, *idx),
             View::CleanupConfirm => self.render_cleanup_confirm(frame),
+            View::CleanupProgress => self.render_cleanup_progress(frame),
             View::Help => self.render_help(frame),
             View::Info(idx) => self.render_info(frame, *idx),
             View::FlatView => self.render_flat_view(frame),
@@ -1350,6 +1478,10 @@ impl App {
 
     fn render_cleanup_confirm(&self, frame: &mut ratatui::Frame) {
         views::cleanup_confirm::render(self, frame);
+    }
+
+    fn render_cleanup_progress(&self, frame: &mut ratatui::Frame) {
+        views::cleanup_progress::render(self, frame);
     }
 
     fn render_help(&self, frame: &mut ratatui::Frame) {
@@ -1405,6 +1537,9 @@ impl App {
             blocked_paths: Vec::new(),
             seen_paths: HashSet::new(),
             deduped_total: 0,
+            cleanup_rx: None,
+            cleanup_cancel: None,
+            cleanup_progress: None,
         }
     }
 }
@@ -1444,6 +1579,7 @@ pub enum View {
     ModuleList,
     ModuleDetail(usize),
     CleanupConfirm,
+    CleanupProgress,
     Help,
     Info(usize),
     FlatView,
