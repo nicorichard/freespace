@@ -80,13 +80,14 @@ impl SourceIdentifier {
         })
     }
 
-    /// SSH clone URL for GitHub sources.
-    pub fn clone_url(&self) -> Option<String> {
+    /// Clone URLs for GitHub sources, in order of preference (HTTPS first, SSH fallback).
+    pub fn clone_urls(&self) -> Vec<String> {
         match self {
-            SourceIdentifier::GitHub { owner, repo, .. } => {
-                Some(format!("git@github.com:{}/{}.git", owner, repo))
-            }
-            SourceIdentifier::Local { .. } => None,
+            SourceIdentifier::GitHub { owner, repo, .. } => vec![
+                format!("https://github.com/{}/{}.git", owner, repo),
+                format!("git@github.com:{}/{}.git", owner, repo),
+            ],
+            SourceIdentifier::Local { .. } => vec![],
         }
     }
 
@@ -289,21 +290,24 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // --- clone_url ---
+    // --- clone_urls ---
 
     #[test]
-    fn clone_url_github() {
+    fn clone_urls_github() {
         let src = SourceIdentifier::parse("github:user/repo").unwrap();
         assert_eq!(
-            src.clone_url(),
-            Some("git@github.com:user/repo.git".to_string())
+            src.clone_urls(),
+            vec![
+                "https://github.com/user/repo.git".to_string(),
+                "git@github.com:user/repo.git".to_string(),
+            ]
         );
     }
 
     #[test]
-    fn clone_url_local_is_none() {
+    fn clone_urls_local_is_empty() {
         let src = SourceIdentifier::parse("/tmp/foo").unwrap();
-        assert_eq!(src.clone_url(), None);
+        assert!(src.clone_urls().is_empty());
     }
 
     // --- default_dir_name ---
