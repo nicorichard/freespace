@@ -92,3 +92,4 @@ Modules are declarative TOML manifests — no code execution.
 
 - **Cross-platform `libc` casts:** `libc::statvfs` fields differ in type across platforms (e.g. `u32` on macOS, `u64` on Linux). Use `#[allow(clippy::unnecessary_cast)]` on functions that cast these fields to `u64` so clippy passes on all targets.
 - **View-based navigation:** Directory browsing always uses `View::FileBrowser`. New views that need directory browsing should transition to FileBrowser with `browser_origin` set — never embed drill logic inline.
+- **View transitions:** Always use `self.set_view(view)` instead of direct `self.current_view = view` assignment — it resets `view_offset` automatically to prevent stale scroll positions.

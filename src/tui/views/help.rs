@@ -1,5 +1,6 @@
 // Help overlay — centered modal listing all keybindings by context.
 
+use crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -7,23 +8,21 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
 use crate::app::App;
+use crate::tui::widgets::centered_rect;
 
-/// Compute a centered rectangle that is at most `max_percent` of the terminal area.
-fn centered_rect(area: Rect, max_percent: u16) -> Rect {
-    let max_width = area.width * max_percent / 100;
-    let max_height = area.height * max_percent / 100;
-
-    let width = max_width.max(40).min(area.width);
-    let height = max_height.max(10).min(area.height);
-
-    let x = (area.width.saturating_sub(width)) / 2;
-    let y = (area.height.saturating_sub(height)) / 2;
-
-    Rect::new(x, y, width, height)
+/// Handle key events for the help overlay.
+pub fn handle_key(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Char('?') | KeyCode::Esc => {
+            app.set_view(app.previous_view);
+            app.selected_index = 0;
+        }
+        _ => {}
+    }
 }
 
 /// Render the help overlay as a centered modal on top of the current view.
-pub fn render(app: &App, frame: &mut Frame) {
+pub fn render(app: &mut App, frame: &mut Frame) {
     let area = frame.area();
     let dialog_area = centered_rect(area, 70);
 
@@ -45,7 +44,7 @@ pub fn render(app: &App, frame: &mut Frame) {
     render_footer(app, frame, inner_chunks[2]);
 }
 
-fn render_header(app: &App, frame: &mut Frame, area: Rect) {
+fn render_header(app: &mut App, frame: &mut Frame, area: Rect) {
     let header = Paragraph::new(Line::from(vec![Span::styled(
         " Keyboard Shortcuts",
         app.theme.style_header(),
@@ -58,7 +57,7 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(header, area);
 }
 
-fn render_keybindings(app: &App, frame: &mut Frame, area: Rect) {
+fn render_keybindings(app: &mut App, frame: &mut Frame, area: Rect) {
     let section_style = Style::default()
         .fg(app.theme.header_fg)
         .add_modifier(Modifier::BOLD);
@@ -73,13 +72,23 @@ fn render_keybindings(app: &App, frame: &mut Frame, area: Rect) {
         keybinding_row("q", "Quit application", key_style, desc_style),
         keybinding_row("?", "Toggle help overlay", key_style, desc_style),
         Row::new(vec![Span::raw(""), Span::raw("")]),
+        // Navigation section
+        Row::new(vec![
+            Span::styled("Navigation (all list views)", section_style),
+            Span::raw(""),
+        ]),
+        keybinding_row("j / \u{2193}", "Move down", key_style, desc_style),
+        keybinding_row("k / \u{2191}", "Move up", key_style, desc_style),
+        keybinding_row("PgDn", "Jump down 20 items", key_style, desc_style),
+        keybinding_row("PgUp", "Jump up 20 items", key_style, desc_style),
+        keybinding_row("Home / g", "Jump to first item", key_style, desc_style),
+        keybinding_row("End / G", "Jump to last item", key_style, desc_style),
+        Row::new(vec![Span::raw(""), Span::raw("")]),
         // Module List section
         Row::new(vec![
             Span::styled("Module List", section_style),
             Span::raw(""),
         ]),
-        keybinding_row("j / \u{2193}", "Move down", key_style, desc_style),
-        keybinding_row("k / \u{2191}", "Move up", key_style, desc_style),
         keybinding_row("Enter", "Open module details", key_style, desc_style),
         keybinding_row("Space", "Toggle module selection", key_style, desc_style),
         keybinding_row("a", "Select all modules", key_style, desc_style),
@@ -87,14 +96,18 @@ fn render_keybindings(app: &App, frame: &mut Frame, area: Rect) {
         keybinding_row("i", "Module info", key_style, desc_style),
         keybinding_row("/", "Filter list", key_style, desc_style),
         keybinding_row("c", "Clean selected items", key_style, desc_style),
+        keybinding_row(
+            "Tab",
+            "Switch between module list and all-items view",
+            key_style,
+            desc_style,
+        ),
         Row::new(vec![Span::raw(""), Span::raw("")]),
         // Module Detail section
         Row::new(vec![
             Span::styled("Module Detail", section_style),
             Span::raw(""),
         ]),
-        keybinding_row("j / \u{2193}", "Move down", key_style, desc_style),
-        keybinding_row("k / \u{2191}", "Move up", key_style, desc_style),
         keybinding_row("Space", "Toggle item selection", key_style, desc_style),
         keybinding_row("a", "Select all items", key_style, desc_style),
         keybinding_row("n", "Deselect all items", key_style, desc_style),
@@ -115,7 +128,10 @@ fn render_keybindings(app: &App, frame: &mut Frame, area: Rect) {
             Span::styled("Cleanup Confirm", section_style),
             Span::raw(""),
         ]),
-        keybinding_row("y", "Confirm cleanup", key_style, desc_style),
+        keybinding_row("Space", "Toggle item check", key_style, desc_style),
+        keybinding_row("a", "Toggle all checks", key_style, desc_style),
+        keybinding_row("t", "Move to trash", key_style, desc_style),
+        keybinding_row("d", "Permanently delete", key_style, desc_style),
         keybinding_row("n / Esc", "Cancel and go back", key_style, desc_style),
     ];
 
@@ -148,7 +164,7 @@ fn keybinding_row<'a>(
     ])
 }
 
-fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
+fn render_footer(app: &mut App, frame: &mut Frame, area: Rect) {
     let footer = Paragraph::new(Line::from(vec![Span::styled(
         " ? or Esc to close ",
         app.theme.style_normal(),

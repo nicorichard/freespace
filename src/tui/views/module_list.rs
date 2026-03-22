@@ -1,15 +1,167 @@
 // Module list view (main screen).
 
+use std::path::PathBuf;
+
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{matches_filter, App, ModuleStatus, ScanStatus};
+use crate::app::{matches_filter, App, ModuleStatus, ScanStatus, View};
 use crate::tui::widgets::{
-    checkbox_str, flash_line, format_size, format_size_or_placeholder, keybinding_bar, module_icon,
-    render_status_line, CheckState,
+    checkbox_str, cmp_size_desc, format_size, format_size_or_placeholder, is_checkbox_click,
+    module_icon, render_view_status_bar, CheckState, SPINNER_CHARS,
 };
+
+/// Number of items to jump when pressing Page Up/Down.
+const PAGE_SIZE: usize = 20;
+
+/// Handle key events for the module list view.
+pub fn handle_key(app: &mut App, key: KeyCode) {
+    let sorted = sorted_module_indices(app);
+    let count = sorted.len();
+
+    match key {
+        // Navigate down
+        KeyCode::Char('j') | KeyCode::Down => {
+            if count > 0 {
+                app.selected_index = (app.selected_index + 1) % count;
+            }
+        }
+        // Navigate up
+        KeyCode::Char('k') | KeyCode::Up => {
+            if count > 0 {
+                app.selected_index = if app.selected_index == 0 {
+                    count - 1
+                } else {
+                    app.selected_index - 1
+                };
+            }
+        }
+        // Page Down
+        KeyCode::PageDown => {
+            if count > 0 {
+                app.selected_index = (app.selected_index + PAGE_SIZE).min(count - 1);
+            }
+        }
+        // Page Up
+        KeyCode::PageUp => {
+            if count > 0 {
+                app.selected_index = app.selected_index.saturating_sub(PAGE_SIZE);
+            }
+        }
+        // Home / g: jump to first item
+        KeyCode::Home | KeyCode::Char('g') => {
+            app.selected_index = 0;
+        }
+        // End / G: jump to last item
+        KeyCode::End | KeyCode::Char('G') => {
+            if count > 0 {
+                app.selected_index = count - 1;
+            }
+        }
+        // Enter detail view for selected module
+        KeyCode::Enter => {
+            if let Some(&module_idx) = sorted.get(app.selected_index) {
+                app.module_list_index = app.selected_index;
+                app.clear_filter();
+                app.set_view(View::ModuleDetail(module_idx));
+                app.selected_index = 0;
+            }
+        }
+        // Toggle selection for all items in the focused module
+        KeyCode::Char(' ') => {
+            if let Some(&module_idx) = sorted.get(app.selected_index) {
+                let items = &app.modules[module_idx].items;
+                let all_selected = !items.is_empty()
+                    && items
+                        .iter()
+                        .all(|item| app.selected_items.contains(&item.path));
+                if all_selected {
+                    // Deselect all
+                    for item in &app.modules[module_idx].items {
+                        app.selected_items.remove(&item.path);
+                    }
+                } else {
+                    // Select all
+                    for item in &app.modules[module_idx].items {
+                        app.selected_items.insert(item.path.clone());
+                    }
+                }
+            }
+        }
+        // Select all items across all visible (filtered) modules
+        KeyCode::Char('a') => {
+            for &module_idx in &sorted {
+                let paths: Vec<PathBuf> = app.modules[module_idx]
+                    .items
+                    .iter()
+                    .map(|item| item.path.clone())
+                    .collect();
+                for path in paths {
+                    app.selected_items.insert(path);
+                }
+            }
+        }
+        // Deselect all items across all visible (filtered) modules
+        KeyCode::Char('n') => {
+            for &module_idx in &sorted {
+                let paths: Vec<PathBuf> = app.modules[module_idx]
+                    .items
+                    .iter()
+                    .map(|item| item.path.clone())
+                    .collect();
+                for path in paths {
+                    app.selected_items.remove(&path);
+                }
+            }
+        }
+        // Open help overlay
+        KeyCode::Char('?') => {
+            app.previous_view = app.current_view;
+            app.set_view(View::Help);
+        }
+        // Transition to cleanup confirmation if items are selected
+        KeyCode::Char('c') => {
+            if !app.selected_items.is_empty() {
+                app.previous_view = app.current_view;
+                app.confirm_checked = app.selected_items.clone();
+                app.set_view(View::CleanupConfirm);
+                app.selected_index = 0;
+            }
+        }
+        // Enter filter mode
+        KeyCode::Char('/') => {
+            app.filter_active = true;
+            app.filter_query.clear();
+            app.filter_cursor = 0;
+            app.selected_index = 0;
+        }
+        // Open info overlay for the selected module
+        KeyCode::Char('i') => {
+            if let Some(&module_idx) = sorted.get(app.selected_index) {
+                app.previous_view = app.current_view;
+                app.set_view(View::Info(module_idx));
+            }
+        }
+        // Switch to flat view
+        KeyCode::Tab => {
+            app.module_list_index = app.selected_index;
+            app.clear_filter();
+            app.set_view(View::FlatView);
+            app.selected_index = 0;
+        }
+        // Esc: clear filter
+        KeyCode::Esc => {
+            if !app.filter_query.is_empty() {
+                app.clear_filter();
+                app.selected_index = 0;
+            }
+        }
+        _ => {}
+    }
+}
 
 /// Sort module indices by size descending. 0 B modules sink to the bottom.
 fn sort_modules(app: &App, indices: &mut [usize]) {
@@ -29,12 +181,7 @@ fn sort_modules(app: &App, indices: &mut [usize]) {
         }
 
         // Sort by size descending
-        match (size_b, size_a) {
-            (Some(sb), Some(sa)) => sb.cmp(&sa),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.cmp(&b),
-        }
+        cmp_size_desc(size_a, size_b).then(a.cmp(&b))
     });
 }
 
@@ -56,7 +203,7 @@ pub fn sorted_module_indices(app: &App) -> Vec<usize> {
 }
 
 /// All module indices including 0 B — used for rendering the full list.
-fn all_sorted_module_indices(app: &App) -> Vec<usize> {
+pub fn all_sorted_module_indices(app: &App) -> Vec<usize> {
     let mut indices: Vec<usize> = (0..app.modules.len())
         .filter(|&i| {
             matches_filter(
@@ -70,8 +217,50 @@ fn all_sorted_module_indices(app: &App) -> Vec<usize> {
     indices
 }
 
+/// Handle click events for the module list view.
+pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(2),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    let table_area = chunks[1];
+    let content_top = table_area.y + 1;
+    let content_height = table_area.height.saturating_sub(2) as usize;
+    if row < content_top || content_height == 0 {
+        return;
+    }
+    let clicked_visual_offset = (row - content_top) as usize;
+    if clicked_visual_offset >= content_height {
+        return;
+    }
+
+    let all_sorted = all_sorted_module_indices(app);
+    let navigable = sorted_module_indices(app);
+
+    let scroll_offset = app.view_offset;
+    let clicked_all_idx = scroll_offset + clicked_visual_offset;
+
+    if clicked_all_idx >= all_sorted.len() {
+        return;
+    }
+    let clicked_module_idx = all_sorted[clicked_all_idx];
+    if let Some(nav_pos) = navigable.iter().position(|&i| i == clicked_module_idx) {
+        let on_checkbox = is_checkbox_click(col, table_area);
+        app.selected_index = nav_pos;
+        if on_checkbox {
+            app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
+        }
+    }
+}
+
 /// Render the module list view (main screen).
-pub fn render(app: &App, frame: &mut Frame) {
+pub fn render(app: &mut App, frame: &mut Frame) {
     let area = frame.area();
 
     let chunks = Layout::default()
@@ -90,13 +279,7 @@ pub fn render(app: &App, frame: &mut Frame) {
     render_status_bar(app, frame, chunks[3]);
 }
 
-/// Spinner characters that cycle during scanning.
-const SPINNER_CHARS: &[char] = &[
-    '\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}', '\u{2827}',
-    '\u{2807}', '\u{280f}',
-];
-
-fn render_title_bar(app: &App, frame: &mut Frame, area: Rect) {
+fn render_title_bar(app: &mut App, frame: &mut Frame, area: Rect) {
     let total = app.deduped_total;
 
     let disk_suffix: Vec<Span> = match (app.disk_free, app.disk_total) {
@@ -174,7 +357,7 @@ fn render_title_bar(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(title, area);
 }
 
-fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
+fn render_module_table(app: &mut App, frame: &mut Frame, area: Rect) {
     if app.modules.is_empty() {
         let content = Paragraph::new("No modules loaded.")
             .style(app.theme.style_normal())
@@ -221,10 +404,7 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
             let selected_count = ms
                 .items
                 .iter()
-                .filter(|item| {
-                    app.selected_items.contains(&item.path)
-                        || app.selected_items.iter().any(|p| p.starts_with(&item.path))
-                })
+                .filter(|item| !matches!(app.check_state(&item.path), CheckState::None))
                 .count();
             if selected_count == 0 {
                 CheckState::None
@@ -297,8 +477,10 @@ fn render_module_table(app: &App, frame: &mut Frame, area: Rect) {
         .highlight_symbol("\u{25b6} ");
 
     let mut state = TableState::default();
+    *state.offset_mut() = app.view_offset;
     state.select(Some(visual_selected));
     frame.render_stateful_widget(table, area, &mut state);
+    app.view_offset = state.offset();
 }
 
 /// Sort module indices for testing visibility.
@@ -307,7 +489,7 @@ pub fn all_sorted_module_indices_for_test(app: &App) -> Vec<usize> {
     all_sorted_module_indices(app)
 }
 
-fn render_description_pane(app: &App, frame: &mut Frame, area: Rect) {
+fn render_description_pane(app: &mut App, frame: &mut Frame, area: Rect) {
     let selected = sorted_module_indices(app).get(app.selected_index).copied();
     let description = selected
         .map(|idx| app.modules[idx].module.description.as_str())
@@ -334,45 +516,30 @@ fn render_description_pane(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
-    let line = if let Some((ref msg, ref level)) = app.flash_message {
-        flash_line(msg, level, &app.theme)
-    } else if app.filter_active {
-        // Active filter input mode
-        Line::from(vec![
-            Span::styled(" / ", app.theme.style_size()),
-            Span::styled(&app.filter_query, app.theme.style_normal()),
-            Span::styled("\u{2588}", app.theme.style_size()),
-        ])
-    } else if !app.filter_query.is_empty() {
-        // Filter is set but not being edited
-        let sorted = sorted_module_indices(app);
-        let total = app.modules.len();
-        let shown = sorted.len();
-        Line::from(vec![
-            Span::styled(
-                format!(" filter: \"{}\" ({}/{})  ", app.filter_query, shown, total),
-                app.theme.style_size(),
-            ),
-            Span::styled("/ filter  Esc clear", app.theme.style_normal()),
-        ])
-    } else {
-        keybinding_bar(
-            &[
-                ("space", "select"),
-                ("a", "all"),
-                ("n", "none"),
-                ("i", "info"),
-                ("/", "filter"),
-                ("c", "clean"),
-                ("tab", "all items"),
-                ("?", "help"),
-                ("q", "quit"),
-            ],
-            &app.theme,
-        )
-    };
-    render_status_line(frame, area, line, &app.theme);
+fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect) {
+    let shown = sorted_module_indices(app).len();
+    let total = app.modules.len();
+    render_view_status_bar(
+        frame,
+        area,
+        &app.theme,
+        app.flash_message.as_ref().map(|(m, l)| (m.as_str(), l)),
+        app.filter_active,
+        &app.filter_query,
+        shown,
+        total,
+        &[
+            ("space", "select"),
+            ("a", "all"),
+            ("n", "none"),
+            ("i", "info"),
+            ("/", "filter"),
+            ("c", "clean"),
+            ("tab", "all items"),
+            ("?", "help"),
+            ("q", "quit"),
+        ],
+    );
 }
 
 #[cfg(test)]
@@ -394,6 +561,9 @@ mod tests {
             targets: vec![Target {
                 paths: vec!["~/test".to_string()],
                 description: None,
+                restore: crate::module::manifest::RestoreKind::default(),
+                restore_steps: None,
+                risk: crate::module::manifest::RiskLevel::default(),
             }],
         };
         ModuleState {
@@ -406,6 +576,9 @@ mod tests {
                 target_description: None,
                 safety_level: crate::core::safety::SafetyLevel::Safe,
                 is_shared: false,
+                restore_kind: crate::module::manifest::RestoreKind::default(),
+                restore_steps: None,
+                risk_level: crate::module::manifest::RiskLevel::default(),
             }],
             total_size: Some(size),
             status: ModuleStatus::Ready,
@@ -427,6 +600,9 @@ mod tests {
                 targets: vec![Target {
                     paths: vec!["~/x".to_string()],
                     description: None,
+                    restore: crate::module::manifest::RestoreKind::default(),
+                    restore_steps: None,
+                    risk: crate::module::manifest::RiskLevel::default(),
                 }],
             },
             items: vec![],
@@ -468,20 +644,20 @@ mod tests {
 
     #[test]
     fn render_does_not_panic_empty_modules() {
-        let app = App::new_for_test(vec![]);
+        let mut app = App::new_for_test(vec![]);
         let backend = ratatui::backend::TestBackend::new(100, 30);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render(&app, frame)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
     }
 
     #[test]
     fn render_does_not_panic_with_modules() {
-        let app = App::new_for_test(vec![
+        let mut app = App::new_for_test(vec![
             make_module("docker", 5_000_000_000),
             make_module("npm-cache", 1_000_000_000),
         ]);
         let backend = ratatui::backend::TestBackend::new(100, 30);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render(&app, frame)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
     }
 }

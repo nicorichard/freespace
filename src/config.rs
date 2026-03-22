@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Errors that can occur when loading the config file.
 #[derive(Debug, thiserror::Error)]
@@ -11,10 +11,12 @@ pub enum ConfigError {
     ReadError(#[from] std::io::Error),
     #[error("could not parse config file: {0}")]
     ParseError(#[from] toml::de::Error),
+    #[error("could not serialize config: {0}")]
+    SerializeError(#[from] toml::ser::Error),
 }
 
 /// Application-level configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AppConfig {
     #[serde(skip)]
@@ -55,6 +57,40 @@ impl AppConfig {
         let content = std::fs::read_to_string(&path)?;
         let config: AppConfig = toml::from_str(&content)?;
         Ok(config)
+    }
+
+    /// Save config to `~/.config/freespace/config.toml`.
+    pub fn save(&self) -> Result<(), ConfigError> {
+        let path = config_path().ok_or_else(|| {
+            ConfigError::ReadError(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "could not determine config path",
+            ))
+        })?;
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let content = toml::to_string_pretty(self)?;
+        std::fs::write(&path, content)?;
+        Ok(())
+    }
+
+    /// Add a search directory. Returns false if already present.
+    pub fn add_search_dir(&mut self, path: String) -> bool {
+        if self.search_dirs.contains(&path) {
+            return false;
+        }
+        self.search_dirs.push(path);
+        true
+    }
+
+    /// Remove a search directory. Returns false if not found.
+    pub fn remove_search_dir(&mut self, path: &str) -> bool {
+        let len = self.search_dirs.len();
+        self.search_dirs.retain(|d| d != path);
+        self.search_dirs.len() < len
     }
 }
 

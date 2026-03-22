@@ -1,6 +1,32 @@
 // Path safety validation for cleanup operations.
 
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+/// Cached canonical forms of built-in deny paths: `(display_string, canonical_path)`.
+/// Computed once on first access since the built-in list is static for the process lifetime.
+static CANONICAL_DENY_PATHS: LazyLock<Vec<(String, PathBuf)>> = LazyLock::new(|| {
+    default_deny_paths()
+        .into_iter()
+        .map(|p| {
+            let display = p.display().to_string();
+            let canonical = p.canonicalize().unwrap_or(p);
+            (display, canonical)
+        })
+        .collect()
+});
+
+/// Cached canonical forms of built-in warn paths: `(display_string, canonical_path)`.
+static CANONICAL_WARN_PATHS: LazyLock<Vec<(String, PathBuf)>> = LazyLock::new(|| {
+    default_warn_paths()
+        .into_iter()
+        .map(|p| {
+            let display = p.display().to_string();
+            let canonical = p.canonicalize().unwrap_or(p);
+            (display, canonical)
+        })
+        .collect()
+});
 
 /// Safety classification for a filesystem path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,12 +103,7 @@ fn default_warn_paths() -> Vec<PathBuf> {
 
 /// Expand `~` prefix to the user's home directory.
 fn expand_user_path(s: &str) -> PathBuf {
-    if let Some(rest) = s.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
-    }
-    PathBuf::from(s)
+    super::paths::expand_tilde(s)
 }
 
 /// Check if `path` is blocked by the deny-list (builtins + user-configured extras).
@@ -97,10 +118,15 @@ pub fn is_path_denied(path: &Path, extra_deny: &[PathBuf]) -> Option<String> {
         return Some("/".to_string());
     }
 
-    let mut deny = default_deny_paths();
-    deny.extend(extra_deny.iter().cloned());
+    // Check cached built-in deny paths
+    for (display, deny_canonical) in CANONICAL_DENY_PATHS.iter() {
+        if canonical == *deny_canonical || canonical.starts_with(deny_canonical) {
+            return Some(display.clone());
+        }
+    }
 
-    for deny_path in &deny {
+    // Check user-configured extra deny paths (not cached, typically few)
+    for deny_path in extra_deny {
         let deny_canonical = deny_path
             .canonicalize()
             .unwrap_or_else(|_| deny_path.clone());
@@ -132,11 +158,15 @@ pub fn classify_path(
         return (SafetyLevel::Deny, Some("/".to_string()));
     }
 
-    // Check deny list
-    let mut deny = default_deny_paths();
-    deny.extend(extra_deny.iter().cloned());
+    // Check cached built-in deny paths
+    for (display, deny_canonical) in CANONICAL_DENY_PATHS.iter() {
+        if canonical == *deny_canonical || canonical.starts_with(deny_canonical) {
+            return (SafetyLevel::Deny, Some(display.clone()));
+        }
+    }
 
-    for deny_path in &deny {
+    // Check user-configured extra deny paths (not cached, typically few)
+    for deny_path in extra_deny {
         let deny_canonical = deny_path
             .canonicalize()
             .unwrap_or_else(|_| deny_path.clone());
@@ -145,14 +175,10 @@ pub fn classify_path(
         }
     }
 
-    // Check warn list
-    let warn = default_warn_paths();
-    for warn_path in &warn {
-        let warn_canonical = warn_path
-            .canonicalize()
-            .unwrap_or_else(|_| warn_path.clone());
-        if canonical == warn_canonical || canonical.starts_with(&warn_canonical) {
-            return (SafetyLevel::Warn, Some(warn_path.display().to_string()));
+    // Check cached built-in warn paths
+    for (display, warn_canonical) in CANONICAL_WARN_PATHS.iter() {
+        if canonical == *warn_canonical || canonical.starts_with(warn_canonical) {
+            return (SafetyLevel::Warn, Some(display.clone()));
         }
     }
 

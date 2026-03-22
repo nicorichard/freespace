@@ -1,5 +1,7 @@
 // Shared widget utilities used by both module list and module detail views.
 
+use std::cmp::Ordering;
+
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
@@ -7,6 +9,26 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::tui::theme::Theme;
+
+/// Spinner characters (Braille dots) that cycle during scanning/loading.
+pub const SPINNER_CHARS: &[char] = &[
+    '\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}', '\u{2827}',
+    '\u{2807}', '\u{280f}',
+];
+
+/// Compare two `Option<u64>` sizes for descending sort order.
+///
+/// - `Some` values sort descending (largest first).
+/// - `None` sorts before `Some` (unknown/loading items appear first).
+/// - Two `None` values compare as `Equal`.
+pub fn cmp_size_desc(a: Option<u64>, b: Option<u64>) -> Ordering {
+    match (b, a) {
+        (Some(sb), Some(sa)) => sb.cmp(&sa),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
 
 /// Build a styled keybinding bar from a slice of (key, action) pairs.
 ///
@@ -100,6 +122,69 @@ pub fn flash_line<'a>(message: &'a str, level: &crate::app::FlashLevel, theme: &
         crate::app::FlashLevel::Error => theme.style_error(),
     };
     Line::from(Span::styled(format!(" {}", message), style))
+}
+
+/// Render a standard status bar with flash message, filter input, or keybinding bar.
+///
+/// This encapsulates the pattern shared by all list views:
+/// 1. If a flash message is active, show it
+/// 2. If filter input is active, show the filter cursor
+/// 3. If a filter query is set, show it with match counts
+/// 4. Otherwise show the keybinding bar
+#[allow(clippy::too_many_arguments)]
+pub fn render_view_status_bar(
+    frame: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    flash: Option<(&str, &crate::app::FlashLevel)>,
+    filter_active: bool,
+    filter_query: &str,
+    shown: usize,
+    total: usize,
+    bindings: &[(&str, &str)],
+) {
+    let line = if let Some((msg, level)) = flash {
+        flash_line(msg, level, theme)
+    } else if filter_active {
+        Line::from(vec![
+            Span::styled(" / ", theme.style_size()),
+            Span::styled(filter_query.to_string(), theme.style_normal()),
+            Span::styled("\u{2588}", theme.style_size()),
+        ])
+    } else if !filter_query.is_empty() {
+        Line::from(vec![
+            Span::styled(
+                format!(" filter: \"{}\" ({}/{})  ", filter_query, shown, total),
+                theme.style_size(),
+            ),
+            Span::styled("/ filter  Esc clear", theme.style_normal()),
+        ])
+    } else {
+        keybinding_bar(bindings, theme)
+    };
+    render_status_line(frame, area, line, theme);
+}
+
+/// Check if a click column is in the checkbox zone of a table area.
+/// The checkbox column is the first column, within the table's left border
+/// and highlight symbol area.
+pub fn is_checkbox_click(col: u16, table_area: Rect) -> bool {
+    // border (1) + highlight symbol (2) + checkbox column (5) = 8 chars from table left
+    col < table_area.x + 8
+}
+
+/// Compute a centered rectangle that is at most `max_percent` of the terminal area.
+pub fn centered_rect(area: Rect, max_percent: u16) -> Rect {
+    let max_width = area.width * max_percent / 100;
+    let max_height = area.height * max_percent / 100;
+
+    let width = max_width.max(40).min(area.width);
+    let height = max_height.max(10).min(area.height);
+
+    let x = (area.width.saturating_sub(width)) / 2;
+    let y = (area.height.saturating_sub(height)) / 2;
+
+    Rect::new(x, y, width, height)
 }
 
 /// Normalize Emacs/terminal-style Ctrl keybindings to standard arrow keys.
@@ -207,5 +292,23 @@ mod tests {
     #[test]
     fn checkbox_partial() {
         assert_eq!(checkbox_str(&CheckState::Partial), "[~]");
+    }
+
+    #[test]
+    fn cmp_size_desc_both_some() {
+        assert_eq!(cmp_size_desc(Some(100), Some(200)), Ordering::Greater);
+        assert_eq!(cmp_size_desc(Some(200), Some(100)), Ordering::Less);
+        assert_eq!(cmp_size_desc(Some(100), Some(100)), Ordering::Equal);
+    }
+
+    #[test]
+    fn cmp_size_desc_none_before_some() {
+        assert_eq!(cmp_size_desc(None, Some(100)), Ordering::Less);
+        assert_eq!(cmp_size_desc(Some(100), None), Ordering::Greater);
+    }
+
+    #[test]
+    fn cmp_size_desc_both_none() {
+        assert_eq!(cmp_size_desc(None, None), Ordering::Equal);
     }
 }

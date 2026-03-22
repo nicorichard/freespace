@@ -36,7 +36,7 @@ impl InstallSelectState {
         let count = candidates.len();
         Self {
             candidates,
-            selected: vec![true; count],
+            selected: vec![false; count],
             cursor: 0,
             theme: Theme::default(),
         }
@@ -232,7 +232,7 @@ mod tests {
         let count = candidates.len();
         InstallSelectState {
             candidates,
-            selected: vec![true; count],
+            selected: vec![false; count],
             cursor: 0,
             theme: Theme::default(),
         }
@@ -261,17 +261,16 @@ mod tests {
     #[test]
     fn toggle_selection() {
         let mut s = make_state(3);
-        assert!(s.selected[0]);
-        s.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
         assert!(!s.selected[0]);
         s.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
         assert!(s.selected[0]);
+        s.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert!(!s.selected[0]);
     }
 
     #[test]
     fn select_all() {
         let mut s = make_state(3);
-        s.selected = vec![false; 3];
         s.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
         assert!(s.selected.iter().all(|&v| v));
     }
@@ -279,6 +278,7 @@ mod tests {
     #[test]
     fn select_none() {
         let mut s = make_state(3);
+        s.selected = vec![true; 3];
         s.handle_key(KeyCode::Char('n'), KeyModifiers::NONE);
         assert!(s.selected.iter().all(|&v| !v));
     }
@@ -328,7 +328,7 @@ mod tests {
         s.handle_key(KeyCode::Char('n'), KeyModifiers::CONTROL);
         assert_eq!(s.cursor, 1);
         // Verify it did NOT deselect (the 'n' key bug)
-        assert!(s.selected.iter().all(|&v| v));
+        assert!(s.selected.iter().all(|&v| !v));
     }
 
     #[test]

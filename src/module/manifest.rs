@@ -1,13 +1,92 @@
 // Module manifest (TOML) parsing and data types.
 
 use anyhow::{bail, Result};
-use serde::Deserialize;
+use serde::{de, Deserialize, Deserializer};
 
 use crate::core::safety;
 
+/// How the contents of a target can be restored after deletion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RestoreKind {
+    /// Rebuilt automatically by the system, zero user action needed.
+    #[default]
+    Auto,
+    /// Requires a manual step to restore (e.g. `npm install`, `pod install`).
+    Manual,
+}
+
+impl<'de> Deserialize<'de> for RestoreKind {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "auto" => Ok(RestoreKind::Auto),
+            "manual" => Ok(RestoreKind::Manual),
+            other => Err(de::Error::custom(format!(
+                "unknown restore kind '{}': expected one of auto, manual",
+                other
+            ))),
+        }
+    }
+}
+
+impl std::fmt::Display for RestoreKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RestoreKind::Auto => write!(f, "auto"),
+            RestoreKind::Manual => write!(f, "manual"),
+        }
+    }
+}
+
+/// Potential impact of deleting a target's contents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RiskLevel {
+    /// No meaningful impact — safe to remove freely.
+    #[default]
+    Safe,
+    /// Low impact — minor inconvenience at most.
+    Low,
+    /// May contain user data worth reviewing before deletion.
+    Medium,
+    /// Likely data loss without a backup.
+    High,
+}
+
+impl<'de> Deserialize<'de> for RiskLevel {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "safe" => Ok(RiskLevel::Safe),
+            "low" => Ok(RiskLevel::Low),
+            "medium" => Ok(RiskLevel::Medium),
+            "high" => Ok(RiskLevel::High),
+            other => Err(de::Error::custom(format!(
+                "unknown risk level '{}': expected one of safe, low, medium, high",
+                other
+            ))),
+        }
+    }
+}
+
+impl std::fmt::Display for RiskLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RiskLevel::Safe => write!(f, "safe"),
+            RiskLevel::Low => write!(f, "low"),
+            RiskLevel::Medium => write!(f, "medium"),
+            RiskLevel::High => write!(f, "high"),
+        }
+    }
+}
+
 /// Represents a parsed module manifest (module.toml).
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Module {
     pub id: String,
     pub name: String,
@@ -39,6 +118,11 @@ struct RawTarget {
     path: Option<String>,
     paths: Option<Vec<String>>,
     description: Option<String>,
+    #[serde(default)]
+    restore: RestoreKind,
+    restore_steps: Option<String>,
+    #[serde(default)]
+    risk: RiskLevel,
 }
 
 impl Module {
@@ -72,6 +156,9 @@ impl Module {
             targets.push(Target {
                 paths,
                 description: raw_target.description,
+                restore: raw_target.restore,
+                restore_steps: raw_target.restore_steps,
+                risk: raw_target.risk,
             });
         }
 
@@ -113,10 +200,12 @@ fn validate_id(id: &str) -> Result<()> {
 /// A target that a module scans. Each entry in `paths` is either a fixed path
 /// (supports `~` and glob `*`) or `**/dirname` for recursive local search.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Target {
     pub paths: Vec<String>,
     pub description: Option<String>,
+    pub restore: RestoreKind,
+    pub restore_steps: Option<String>,
+    pub risk: RiskLevel,
 }
 
 #[cfg(test)]
@@ -457,5 +546,128 @@ mod tests {
         targets = []
         "#;
         assert!(Module::parse(toml_str).is_err());
+    }
+
+    // --- restore / risk tests ---
+
+    #[test]
+    fn parse_restore_and_risk() {
+        let toml_str = r#"
+        id = "risk-test"
+        name = "risk-test"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+
+        [[targets]]
+        path = "~/Library/Caches/test"
+        description = "Test cache"
+        restore = "manual"
+        restore_steps = "Run `foo install`"
+        risk = "low"
+        "#;
+        let module = Module::parse(toml_str).unwrap();
+        assert_eq!(module.targets[0].restore, RestoreKind::Manual);
+        assert_eq!(
+            module.targets[0].restore_steps.as_deref(),
+            Some("Run `foo install`")
+        );
+        assert_eq!(module.targets[0].risk, RiskLevel::Low);
+    }
+
+    #[test]
+    fn parse_all_risk_levels() {
+        for (level_str, expected) in [
+            ("safe", RiskLevel::Safe),
+            ("low", RiskLevel::Low),
+            ("medium", RiskLevel::Medium),
+            ("high", RiskLevel::High),
+        ] {
+            let toml_str = format!(
+                r#"
+                id = "r"
+                name = "r"
+                version = "1.0.0"
+                description = "t"
+                author = "t"
+                platforms = ["macos"]
+
+                [[targets]]
+                path = "~/tmp"
+                risk = "{}"
+                "#,
+                level_str
+            );
+            let module = Module::parse(&toml_str).unwrap();
+            assert_eq!(module.targets[0].risk, expected);
+        }
+    }
+
+    #[test]
+    fn parse_all_restore_kinds() {
+        for (kind_str, expected) in [("auto", RestoreKind::Auto), ("manual", RestoreKind::Manual)] {
+            let toml_str = format!(
+                r#"
+                id = "r"
+                name = "r"
+                version = "1.0.0"
+                description = "t"
+                author = "t"
+                platforms = ["macos"]
+
+                [[targets]]
+                path = "~/tmp"
+                restore = "{}"
+                "#,
+                kind_str
+            );
+            let module = Module::parse(&toml_str).unwrap();
+            assert_eq!(module.targets[0].restore, expected);
+        }
+    }
+
+    #[test]
+    fn parse_defaults() {
+        let module = Module::parse(valid_global_toml()).unwrap();
+        assert_eq!(module.targets[0].risk, RiskLevel::Safe);
+        assert_eq!(module.targets[0].restore, RestoreKind::Auto);
+        assert!(module.targets[0].restore_steps.is_none());
+    }
+
+    #[test]
+    fn parse_invalid_risk_level_rejected() {
+        let toml_str = r#"
+        id = "bad"
+        name = "bad"
+        version = "1.0.0"
+        description = "t"
+        author = "t"
+        platforms = ["macos"]
+
+        [[targets]]
+        path = "~/tmp"
+        risk = "unknown"
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains("unknown risk level"));
+    }
+
+    #[test]
+    fn parse_invalid_restore_kind_rejected() {
+        let toml_str = r#"
+        id = "bad"
+        name = "bad"
+        version = "1.0.0"
+        description = "t"
+        author = "t"
+        platforms = ["macos"]
+
+        [[targets]]
+        path = "~/tmp"
+        restore = "unknown"
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains("unknown restore kind"));
     }
 }

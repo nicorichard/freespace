@@ -46,6 +46,9 @@ Every module must have a `module.toml` at the root of its directory. All top-lev
 | `[[targets]]` | Array of tables | Yes | At least one target required |
 | `targets.path` | String | Yes | Path pattern (supports `~`, `*`, and `**/` for recursive search) |
 | `targets.description` | String | No | What this specific target contains |
+| `targets.restore` | String | No | How contents are restored: `"auto"` (default) or `"manual"` |
+| `targets.restore_steps` | String | No | Human-readable recovery instructions (e.g. `"Run npm install"`) |
+| `targets.risk` | String | No | Impact of deletion: `"safe"` (default), `"low"`, `"medium"`, `"high"` |
 
 Modules with a `platforms` list that doesn't include the current OS are silently skipped.
 
@@ -75,6 +78,41 @@ path = "~/.cache/*/tmp"
 ```
 
 Each matched path becomes a separate item in the TUI. If a glob matches nothing, it is silently ignored.
+
+## Restore & Risk
+
+Each target can declare how its contents are restored after deletion and the potential impact:
+
+```toml
+[[targets]]
+path = "**/node_modules"
+description = "Node.js dependencies"
+restore = "manual"
+restore_steps = "Run `npm install` in the project directory"
+risk = "safe"
+```
+
+**`restore`** — How the contents come back after deletion:
+
+| Value | Meaning |
+|-------|---------|
+| `auto` (default) | Rebuilt automatically by the system (e.g. caches, derived data) |
+| `manual` | Requires a user action to restore (e.g. `npm install`, `pod install`) |
+
+**`restore_steps`** — Human-readable instructions shown in the TUI when `restore = "manual"`. Tells the user exactly what to run to get things working again.
+
+**`risk`** — Potential impact of deletion:
+
+| Value | Meaning |
+|-------|---------|
+| `safe` (default) | No meaningful impact — safe to remove freely |
+| `low` | Minor inconvenience at most |
+| `medium` | May contain user data worth reviewing |
+| `high` | Likely data loss without a backup |
+
+These fields are independent. For example, `node_modules` is `restore = "manual"` (needs a command) but `risk = "safe"` (no data loss). A downloads folder might be `restore = "auto"` but `risk = "medium"` (could contain files worth keeping).
+
+All three fields are optional and default to `restore = "auto"`, `risk = "safe"`.
 
 ## Local Targets
 
@@ -128,14 +166,20 @@ platforms = ["macos", "linux"]
 [[targets]]
 path = "~/.npm/_cacache"
 description = "npm download cache"
+restore = "auto"
+risk = "safe"
 
 [[targets]]
 path = "~/.yarn/cache"
 description = "Yarn berry cache directory"
+restore = "auto"
+risk = "safe"
 
 [[targets]]
 path = "~/.local/share/pnpm/store"
 description = "pnpm content-addressable store"
+restore = "auto"
+risk = "safe"
 ```
 
 ## Testing Locally
