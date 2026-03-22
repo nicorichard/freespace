@@ -14,7 +14,6 @@ pub enum ScanMessage {
     /// All items for a module have been discovered and sized.
     ModuleComplete { module_index: usize },
     /// An error occurred while scanning a module.
-    #[allow(dead_code)]
     ModuleError { module_index: usize, error: String },
     /// An item's size has been calculated (async sizing phase).
     ItemSized {
@@ -33,23 +32,22 @@ pub enum ScanMessage {
 }
 
 /// Expand `~` in a path pattern to the user's home directory.
+/// Returns a String (rather than PathBuf) because the result is fed into glob patterns.
 pub(crate) fn expand_tilde(pattern: &str) -> String {
-    if pattern.starts_with("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{}{}", home, &pattern[1..]);
-        }
-    }
-    pattern.to_string()
+    super::paths::expand_tilde(pattern)
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Expand a target path pattern into concrete filesystem paths.
 /// Handles `~` for home directory and `*` for glob expansion.
-pub(crate) fn expand_target_path(pattern: &str) -> Vec<PathBuf> {
+/// Returns an error string if the glob pattern is invalid.
+pub(crate) fn expand_target_path(pattern: &str) -> Result<Vec<PathBuf>, String> {
     let expanded = expand_tilde(pattern);
 
     match glob::glob(&expanded) {
-        Ok(paths) => paths.filter_map(|p| p.ok()).collect(),
-        Err(_) => Vec::new(),
+        Ok(paths) => Ok(paths.filter_map(|p| p.ok()).collect()),
+        Err(e) => Err(format!("invalid glob pattern '{}': {}", pattern, e)),
     }
 }
 
@@ -151,6 +149,9 @@ fn scan_module(
                         target_description: target.description.clone(),
                         safety_level: crate::core::safety::SafetyLevel::Safe,
                         is_shared: false,
+                        restore_kind: target.restore,
+                        restore_steps: target.restore_steps.clone(),
+                        risk_level: target.risk,
                     };
 
                     if tx
@@ -165,7 +166,16 @@ fn scan_module(
                 }
             } else {
                 // Global target: expand path pattern
-                let paths = expand_target_path(path_pattern);
+                let paths = match expand_target_path(path_pattern) {
+                    Ok(paths) => paths,
+                    Err(error) => {
+                        let _ = tx.send(ScanMessage::ModuleError {
+                            module_index,
+                            error,
+                        });
+                        continue;
+                    }
+                };
                 for path in paths {
                     let name = path
                         .file_name()
@@ -186,6 +196,9 @@ fn scan_module(
                         target_description: target.description.clone(),
                         safety_level: crate::core::safety::SafetyLevel::Safe,
                         is_shared: false,
+                        restore_kind: target.restore,
+                        restore_steps: target.restore_steps.clone(),
+                        risk_level: target.risk,
                     };
 
                     if tx
@@ -319,7 +332,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().join("specific");
         fs::create_dir(&dir).unwrap();
-        let paths = expand_target_path(dir.to_str().unwrap());
+        let paths = expand_target_path(dir.to_str().unwrap()).unwrap();
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], dir);
     }
@@ -331,8 +344,14 @@ mod tests {
         fs::create_dir(tmp.path().join("bbb")).unwrap();
         fs::write(tmp.path().join("file.txt"), b"").unwrap();
         let pattern = format!("{}/*", tmp.path().display());
-        let paths = expand_target_path(&pattern);
+        let paths = expand_target_path(&pattern).unwrap();
         assert!(paths.len() >= 2);
+    }
+
+    #[test]
+    fn expand_target_path_invalid_pattern() {
+        let result = expand_target_path("[invalid");
+        assert!(result.is_err());
     }
 
     // --- discover_local_dirs ---
@@ -409,6 +428,9 @@ mod tests {
             targets: vec![crate::module::manifest::Target {
                 paths: vec![target_dir.to_str().unwrap().to_string()],
                 description: None,
+                restore: crate::module::manifest::RestoreKind::default(),
+                restore_steps: None,
+                risk: crate::module::manifest::RiskLevel::default(),
             }],
         };
 

@@ -57,16 +57,7 @@ pub fn load_all_modules(
 
 /// Expand a leading `~` or `~/` to the user's home directory.
 fn expand_tilde(path: &str) -> PathBuf {
-    if path == "~" {
-        if let Some(home) = dirs::home_dir() {
-            return home;
-        }
-    } else if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
-    }
-    PathBuf::from(path)
+    crate::core::paths::expand_tilde(path)
 }
 
 /// Discover and load built-in modules from the modules/ directory.

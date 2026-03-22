@@ -19,6 +19,9 @@ fn make_global_module(name: &str, path: &str) -> Module {
         targets: vec![Target {
             paths: vec![path.to_string()],
             description: None,
+            restore: freespace::module::manifest::RestoreKind::default(),
+            restore_steps: None,
+            risk: freespace::module::manifest::RiskLevel::default(),
         }],
     }
 }
@@ -35,6 +38,9 @@ fn make_local_module(name: &str, dir_name: &str) -> Module {
         targets: vec![Target {
             paths: vec![format!("**/{}", dir_name)],
             description: None,
+            restore: freespace::module::manifest::RestoreKind::default(),
+            restore_steps: None,
+            risk: freespace::module::manifest::RiskLevel::default(),
         }],
     }
 }

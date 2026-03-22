@@ -11,6 +11,10 @@ use freespace::tui;
 #[derive(Parser)]
 #[command(name = "freespace", version, about)]
 struct Cli {
+    /// Directory to scan (overrides configured search_dirs)
+    #[arg(value_name = "PATH")]
+    path: Option<String>,
+
     /// Additional module directory to scan (can be repeated)
     #[arg(long = "module-dir", global = true)]
     module_dirs: Vec<String>,
@@ -34,6 +38,27 @@ enum Command {
         #[command(subcommand)]
         command: ModuleCommand,
     },
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// Add a directory to search for local targets
+    AddSearchDir {
+        /// Path to add
+        path: String,
+    },
+    /// Remove a directory from search dirs
+    RemoveSearchDir {
+        /// Path to remove
+        path: String,
+    },
+    /// Show current configuration
+    List,
 }
 
 #[derive(Subcommand)]
@@ -63,6 +88,13 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         None => {
+            // If a positional path was provided, add it to search_dirs
+            let directory_mode = cli.path.is_some();
+            let mut search_dirs = cli.search_dirs;
+            if let Some(path) = cli.path {
+                search_dirs.push(path);
+            }
+
             // Install panic hook to restore terminal on panic
             tui::install_panic_hook();
 
@@ -70,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
             let mut terminal = tui::init()?;
 
             // Create app and run the main event loop
-            let mut app = app::App::new(cli.module_dirs, cli.search_dirs, cli.dry_run);
+            let mut app = app::App::new(cli.module_dirs, search_dirs, cli.dry_run, directory_mode);
             app.run(&mut terminal)?;
 
             // Restore terminal on normal exit
@@ -90,6 +122,53 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Some(Command::Config { command }) => match command {
+            ConfigCommand::AddSearchDir { path } => {
+                let mut cfg = config::AppConfig::load()?;
+                if cfg.add_search_dir(path.clone()) {
+                    cfg.save()?;
+                    println!("Added '{}' to search_dirs.", path);
+                } else {
+                    println!("'{}' is already in search_dirs.", path);
+                }
+            }
+            ConfigCommand::RemoveSearchDir { path } => {
+                let mut cfg = config::AppConfig::load()?;
+                if cfg.remove_search_dir(&path) {
+                    cfg.save()?;
+                    println!("Removed '{}' from search_dirs.", path);
+                } else {
+                    println!("'{}' is not in search_dirs.", path);
+                }
+            }
+            ConfigCommand::List => {
+                let cfg = config::AppConfig::load()?;
+                println!("search_dirs:");
+                if cfg.search_dirs.is_empty() {
+                    println!("  (none)");
+                } else {
+                    for d in &cfg.search_dirs {
+                        println!("  {}", d);
+                    }
+                }
+                println!("module_dirs:");
+                if cfg.module_dirs.is_empty() {
+                    println!("  (none)");
+                } else {
+                    for d in &cfg.module_dirs {
+                        println!("  {}", d);
+                    }
+                }
+                println!("audit_log: {}", cfg.audit_log);
+                println!("enforce_scope: {}", cfg.enforce_scope);
+                if !cfg.protected_paths.is_empty() {
+                    println!("protected_paths:");
+                    for p in &cfg.protected_paths {
+                        println!("  {}", p);
+                    }
+                }
+            }
+        },
         Some(Command::Module { command }) => {
             let modules_dir = config::default_modules_dir()
                 .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;

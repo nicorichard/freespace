@@ -1,16 +1,44 @@
 // Cleanup-in-progress view — shows progress and handles halt confirmation.
 
+use std::sync::atomic::Ordering;
+
+use crossterm::event::KeyCode;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::tui::widgets::{keybinding_bar, render_status_line};
+use crate::tui::widgets::{keybinding_bar, render_status_line, SPINNER_CHARS};
 
-const SPINNER_CHARS: &[char] = &['|', '/', '-', '\\'];
+/// Handle key events for the cleanup-in-progress view.
+pub fn handle_key(app: &mut App, key: KeyCode) {
+    let halted = app.cleanup_progress.as_ref().is_some_and(|p| p.halted);
 
-pub fn render(app: &App, frame: &mut Frame) {
+    if halted {
+        // Already halted: q quits, anything else goes back to previous view
+        match key {
+            KeyCode::Char('q') => {
+                app.should_quit = true;
+            }
+            _ => {
+                app.finish_cleanup();
+            }
+        }
+    } else {
+        // Cleanup in progress: q/Ctrl+C/Esc halts
+        if matches!(key, KeyCode::Char('q') | KeyCode::Esc) {
+            if let Some(cancel) = &app.cleanup_cancel {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            if let Some(progress) = &mut app.cleanup_progress {
+                progress.halted = true;
+            }
+        }
+    }
+}
+
+pub fn render(app: &mut App, frame: &mut Frame) {
     let area = frame.area();
 
     let chunks = Layout::default()

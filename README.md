@@ -30,6 +30,10 @@ description = "Xcode derived data directories for each project"
 
 That's it. No scripts, no plugins — just a declaration of where disk space hides.
 
+## Heads up
+
+Freespace deletes files. We require confirmation before any cleanup, but please review what you're removing and keep backups of anything important. Use at your own risk — see the MIT license for details.
+
 ## Install
 
 ### With [mise](https://mise.jdx.dev)

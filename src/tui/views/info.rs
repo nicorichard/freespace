@@ -2,31 +2,80 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, View};
 use crate::module::installer;
+use crate::module::manifest::{RestoreKind, RiskLevel};
+use crate::tui::widgets::centered_rect;
 
-/// Compute a centered rectangle that is at most `max_percent` of the terminal area.
-fn centered_rect(area: Rect, max_percent: u16) -> Rect {
-    let max_width = area.width * max_percent / 100;
-    let max_height = area.height * max_percent / 100;
+/// Handle key events for the info overlay.
+pub fn handle_key(app: &mut App, key: KeyCode, module_idx: usize) {
+    if app.info_confirm_remove {
+        match key {
+            KeyCode::Char('y') => {
+                // Remove the module directory and state
+                if let Some(manifest_path) = &app.modules[module_idx].manifest_path {
+                    if let Some(module_dir) = manifest_path.parent() {
+                        let _ = std::fs::remove_dir_all(module_dir);
+                    }
+                }
+                app.modules.remove(module_idx);
+                app.info_confirm_remove = false;
 
-    let width = max_width.max(40).min(area.width);
-    let height = max_height.max(10).min(area.height);
+                // Reset views that may hold stale module indices
+                app.previous_view = View::ModuleList;
+                app.set_view(View::ModuleList);
 
-    let x = (area.width.saturating_sub(width)) / 2;
-    let y = (area.height.saturating_sub(height)) / 2;
+                // Clamp indices to valid range
+                let max_idx = app.modules.len().saturating_sub(1);
+                app.selected_index = app.selected_index.min(max_idx);
+                app.module_list_index = app.module_list_index.min(max_idx);
+                if app.browser_module_idx > module_idx {
+                    app.browser_module_idx -= 1;
+                } else if app.browser_module_idx == module_idx {
+                    app.browser_module_idx = 0;
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                app.info_confirm_remove = false;
+            }
+            _ => {}
+        }
+        return;
+    }
 
-    Rect::new(x, y, width, height)
+    match key {
+        KeyCode::Esc | KeyCode::Char('i') => {
+            app.set_view(app.previous_view);
+            app.selected_index = 0;
+        }
+        KeyCode::Char('e') => {
+            if let Some(manifest_path) = &app.modules[module_idx].manifest_path {
+                app.pending_editor = Some(manifest_path.clone());
+            }
+        }
+        KeyCode::Char('o') => {
+            if let Some(manifest_path) = &app.modules[module_idx].manifest_path {
+                if let Some(module_dir) = manifest_path.parent() {
+                    App::open_in_file_manager(module_dir);
+                }
+            }
+        }
+        KeyCode::Char('r') => {
+            app.info_confirm_remove = true;
+        }
+        _ => {}
+    }
 }
 
 /// Render the info overlay as a centered modal on top of the current view.
-pub fn render(app: &App, frame: &mut Frame, module_idx: usize) {
+pub fn render(app: &mut App, frame: &mut Frame, module_idx: usize) {
     if module_idx >= app.modules.len() {
         return;
     }
@@ -52,7 +101,7 @@ pub fn render(app: &App, frame: &mut Frame, module_idx: usize) {
     render_footer(app, frame, inner_chunks[2]);
 }
 
-fn render_header(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
+fn render_header(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usize) {
     let ms = &app.modules[module_idx];
     let header = Paragraph::new(Line::from(vec![Span::styled(
         format!(" Module Info \u{2014} {}", ms.module.name),
@@ -66,7 +115,7 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
     frame.render_widget(header, area);
 }
 
-fn render_metadata(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) {
+fn render_metadata(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usize) {
     let ms = &app.modules[module_idx];
     let m = &ms.module;
 
@@ -88,6 +137,49 @@ fn render_metadata(app: &App, frame: &mut Frame, area: Rect, module_idx: usize) 
         metadata_row("Platforms", &platforms_str, label_style, value_style),
         metadata_row("Targets", &targets_str, label_style, value_style),
     ];
+
+    // Per-target restore/risk info (only show targets with non-default values)
+    let has_target_metadata = m.targets.iter().any(|t| {
+        t.restore != RestoreKind::Auto || t.restore_steps.is_some() || t.risk != RiskLevel::Safe
+    });
+    if has_target_metadata {
+        rows.push(Row::new(vec![Span::raw(""), Span::raw("")]));
+        for target in &m.targets {
+            let has_info = target.restore != RestoreKind::Auto
+                || target.restore_steps.is_some()
+                || target.risk != RiskLevel::Safe;
+            if !has_info {
+                continue;
+            }
+            let label = target
+                .description
+                .as_deref()
+                .unwrap_or_else(|| target.paths.first().map(|s| s.as_str()).unwrap_or("?"));
+            let mut parts: Vec<String> = Vec::new();
+            if target.restore == RestoreKind::Manual {
+                parts.push("manual restore".to_string());
+            }
+            if target.risk != RiskLevel::Safe {
+                parts.push(format!("{} risk", target.risk));
+            }
+            let badge = parts.join(", ");
+            let badge_style = if matches!(target.risk, RiskLevel::Medium | RiskLevel::High) {
+                app.theme.style_warning()
+            } else {
+                value_style
+            };
+            rows.push(Row::new(vec![
+                Span::styled(label, label_style),
+                Span::styled(badge, badge_style),
+            ]));
+            if let Some(ref steps) = target.restore_steps {
+                rows.push(Row::new(vec![
+                    Span::raw(""),
+                    Span::styled(format!("\u{21b3} {}", steps), app.theme.style_description()),
+                ]));
+            }
+        }
+    }
 
     // Source info (for GitHub-installed modules)
     let source_info = ms
@@ -214,7 +306,7 @@ fn format_timestamp(epoch_secs: u64) -> String {
     }
 }
 
-fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
+fn render_footer(app: &mut App, frame: &mut Frame, area: Rect) {
     let footer = Paragraph::new(Line::from(vec![Span::styled(
         " Esc or i to close ",
         app.theme.style_normal(),
