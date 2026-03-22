@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{matches_filter, App, ItemType, ModuleStatus, View};
+use crate::app::{matches_filter, matches_structured_filter, App, ItemType, ModuleStatus, View};
 use crate::module::manifest::RiskLevel;
 use crate::tui::widgets::{
     checkbox_str, cmp_size_desc, format_size, format_size_or_placeholder, is_checkbox_click,
@@ -211,6 +211,14 @@ pub fn sorted_item_indices(app: &App, module_idx: usize) -> Vec<usize> {
     let items = &app.modules[module_idx].items;
     let mut indices: Vec<usize> = (0..items.len())
         .filter(|&i| matches_filter(&items[i].name, &[], &app.filter_query))
+        .filter(|&i| {
+            matches_structured_filter(
+                items[i].risk_level,
+                items[i].restore_kind,
+                &app.filter_risk,
+                &app.filter_restore,
+            )
+        })
         .collect();
     indices.sort_by(|&a, &b| cmp_size_desc(items[a].size, items[b].size).then(a.cmp(&b)));
     indices
@@ -661,6 +669,7 @@ fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect, module_idx: u
         app.flash_message.as_ref().map(|(m, l)| (m.as_str(), l)),
         app.filter_active,
         &app.filter_query,
+        app.has_structured_filter(),
         shown,
         total,
         &[
@@ -669,7 +678,8 @@ fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect, module_idx: u
             ("n", "none"),
             ("o", "open"),
             ("i", "info"),
-            ("/", "filter"),
+            ("/", "search"),
+            ("f", "filter"),
             ("c", "clean"),
             ("esc", "back"),
             ("?", "help"),

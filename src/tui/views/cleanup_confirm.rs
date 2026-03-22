@@ -528,6 +528,7 @@ fn render_action_bar(app: &mut App, frame: &mut Frame, area: Rect, shown: usize,
         app.flash_message.as_ref().map(|(m, l)| (m.as_str(), l)),
         app.filter_active,
         &app.filter_query,
+        false, // structured filter not applicable in cleanup confirm
         shown,
         total,
         &[
@@ -536,7 +537,7 @@ fn render_action_bar(app: &mut App, frame: &mut Frame, area: Rect, shown: usize,
             ("t", "trash"),
             ("d", "delete"),
             ("n", "cancel"),
-            ("/", "filter"),
+            ("/", "search"),
         ],
     );
 }
