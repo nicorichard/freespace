@@ -36,6 +36,12 @@ Freespace deletes files. We require confirmation before any cleanup, but please 
 
 ## Install
 
+### With [Homebrew](https://brew.sh)
+
+```sh
+brew install nicorichard/tap/freespace
+```
+
 ### With [mise](https://mise.jdx.dev)
 
 ```sh
