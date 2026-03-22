@@ -696,7 +696,8 @@ impl App {
 
     /// Spawn cleanup as a background blocking task, transitioning to CleanupProgress view.
     pub(crate) fn start_cleanup(&mut self, permanent: bool) {
-        let paths: Vec<PathBuf> = self.confirm_checked.iter().cloned().collect();
+        let deduped = crate::tui::views::cleanup_confirm::dedup_paths(&self.confirm_checked);
+        let paths: Vec<PathBuf> = deduped.into_iter().collect();
         let total = paths.len();
         if total == 0 {
             return;

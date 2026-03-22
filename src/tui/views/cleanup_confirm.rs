@@ -1,6 +1,7 @@
 // Cleanup confirmation dialog — centered modal showing items to be deleted.
 
-use std::path::PathBuf;
+use std::collections::{BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -131,6 +132,25 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
     }
 }
 
+/// Remove paths that are descendants of other paths in the set.
+/// E.g. if `/a/b` and `/a/b/c/d` are both present, only `/a/b` is kept.
+pub(crate) fn dedup_paths(paths: &BTreeSet<PathBuf>) -> BTreeSet<PathBuf> {
+    // BTreeSet is already sorted, so parents come before children
+    let mut result = HashSet::new();
+    let mut deduped = BTreeSet::new();
+    for path in paths {
+        let dominated = path
+            .ancestors()
+            .skip(1)
+            .any(|a| result.contains(a as &Path));
+        if !dominated {
+            result.insert(path.clone());
+            deduped.insert(path.clone());
+        }
+    }
+    deduped
+}
+
 /// Info about a selected item for the cleanup confirmation view.
 pub struct ConfirmItem {
     pub name: String,
@@ -144,13 +164,15 @@ pub struct ConfirmItem {
 
 /// Collect selected items across all modules into a flat list.
 /// Also includes items selected during drill-in that aren't direct module items.
+/// Deduplicates: removes children whose parent is also selected, and exact duplicates.
 pub fn collect_selected_items(app: &App) -> Vec<ConfirmItem> {
+    let deduped = dedup_paths(&app.selected_items);
     let mut items: Vec<ConfirmItem> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
     for ms in &app.modules {
         for item in &ms.items {
-            if app.selected_items.contains(&item.path) {
+            if deduped.contains(&item.path) {
                 seen.insert(item.path.clone());
                 items.push(ConfirmItem {
                     name: item.name.clone(),
@@ -166,7 +188,7 @@ pub fn collect_selected_items(app: &App) -> Vec<ConfirmItem> {
     }
 
     // Include drill-in selections not found in module items
-    for path in &app.selected_items {
+    for path in &deduped {
         if !seen.contains(path) {
             let (found_size, found_safety) = app
                 .drill
@@ -641,5 +663,42 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(100, 30);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal.draw(|frame| render(&mut app, frame)).unwrap();
+    }
+
+    #[test]
+    fn dedup_paths_removes_children() {
+        let mut paths = std::collections::BTreeSet::new();
+        paths.insert(PathBuf::from("/a/b"));
+        paths.insert(PathBuf::from("/a/b/c"));
+        paths.insert(PathBuf::from("/a/b/c/d"));
+        let result = dedup_paths(&paths);
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&PathBuf::from("/a/b")));
+    }
+
+    #[test]
+    fn dedup_paths_keeps_disjoint() {
+        let mut paths = std::collections::BTreeSet::new();
+        paths.insert(PathBuf::from("/a/b"));
+        paths.insert(PathBuf::from("/c/d"));
+        let result = dedup_paths(&paths);
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&PathBuf::from("/a/b")));
+        assert!(result.contains(&PathBuf::from("/c/d")));
+    }
+
+    #[test]
+    fn dedup_paths_single_item() {
+        let mut paths = std::collections::BTreeSet::new();
+        paths.insert(PathBuf::from("/a/b"));
+        let result = dedup_paths(&paths);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn dedup_paths_empty() {
+        let paths = std::collections::BTreeSet::new();
+        let result = dedup_paths(&paths);
+        assert!(result.is_empty());
     }
 }
