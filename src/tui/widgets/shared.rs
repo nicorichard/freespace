@@ -139,10 +139,21 @@ pub fn render_view_status_bar(
     flash: Option<(&str, &crate::app::FlashLevel)>,
     filter_active: bool,
     filter_query: &str,
+    has_structured_filter: bool,
     shown: usize,
     total: usize,
     bindings: &[(&str, &str)],
 ) {
+    let filter_indicator: Vec<Span> = if has_structured_filter {
+        vec![
+            Span::styled(" [", theme.style_border()),
+            Span::styled("filters active", theme.style_warning()),
+            Span::styled("] ", theme.style_border()),
+        ]
+    } else {
+        vec![]
+    };
+
     let line = if let Some((msg, level)) = flash {
         flash_line(msg, level, theme)
     } else if filter_active {
@@ -152,15 +163,19 @@ pub fn render_view_status_bar(
             Span::styled("\u{2588}", theme.style_size()),
         ])
     } else if !filter_query.is_empty() {
-        Line::from(vec![
+        let mut spans = vec![
             Span::styled(
-                format!(" filter: \"{}\" ({}/{})  ", filter_query, shown, total),
+                format!(" search: \"{}\" ({}/{})  ", filter_query, shown, total),
                 theme.style_size(),
             ),
-            Span::styled("/ filter  Esc clear", theme.style_normal()),
-        ])
+            Span::styled("/ search  Esc clear", theme.style_normal()),
+        ];
+        spans.extend(filter_indicator);
+        Line::from(spans)
     } else {
-        keybinding_bar(bindings, theme)
+        let mut bar = keybinding_bar(bindings, theme);
+        bar.spans.extend(filter_indicator);
+        bar
     };
     render_status_line(frame, area, line, theme);
 }

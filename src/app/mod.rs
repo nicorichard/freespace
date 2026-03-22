@@ -5,7 +5,7 @@ mod filter;
 mod types;
 
 pub use drill::{DrillLevel, DrillState};
-pub use filter::matches_filter;
+pub use filter::{matches_filter, matches_structured_filter};
 pub use types::{
     CleanupProgressState, FlashLevel, Item, ItemType, ModuleState, ModuleStatus, ScanStatus, View,
 };
@@ -53,6 +53,14 @@ pub struct App {
     pub filter_query: String,
     /// Cursor position within the filter query.
     pub filter_cursor: usize,
+    /// Whether the structured filter menu popup is open.
+    pub filter_menu_open: bool,
+    /// Cursor position within the filter menu (0-5 for 6 options).
+    pub filter_menu_cursor: usize,
+    /// Which risk levels are included (Safe, Low, Medium, High). All true by default.
+    pub filter_risk: [bool; 4],
+    /// Which restore kinds are included (Auto, Manual). All true by default.
+    pub filter_restore: [bool; 2],
     /// Receiver for scan messages from the background scanner.
     scan_rx: mpsc::UnboundedReceiver<ScanMessage>,
     /// Sender for scan messages (kept for drill-in size calculations).
@@ -154,6 +162,10 @@ impl App {
             filter_active: false,
             filter_query: String::new(),
             filter_cursor: 0,
+            filter_menu_open: false,
+            filter_menu_cursor: 0,
+            filter_risk: [true; 4],
+            filter_restore: [true; 2],
             scan_rx: rx,
             scan_tx: tx,
             tick_count: 0,
@@ -555,12 +567,31 @@ impl App {
             }
         }
 
+        // If filter menu is open, handle its keys
+        if self.filter_menu_open {
+            self.handle_key_filter_menu(key);
+            return;
+        }
+
         // Global: q quits from any view (but not during filter input or cleanup progress)
         if key == KeyCode::Char('q')
             && !self.filter_active
             && !matches!(self.current_view, View::CleanupProgress)
         {
             self.should_quit = true;
+            return;
+        }
+
+        // Global: f opens filter menu from any list view
+        if key == KeyCode::Char('f')
+            && !self.filter_active
+            && !matches!(
+                self.current_view,
+                View::Help | View::Info(_) | View::CleanupProgress | View::CleanupConfirm
+            )
+        {
+            self.filter_menu_open = true;
+            self.filter_menu_cursor = 0;
             return;
         }
 
@@ -662,6 +693,46 @@ impl App {
         }
     }
 
+    /// Handle key input while the filter menu popup is open.
+    fn handle_key_filter_menu(&mut self, key: KeyCode) {
+        match key {
+            KeyCode::Esc | KeyCode::Char('f') => {
+                self.filter_menu_open = false;
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                self.toggle_filter_option(self.filter_menu_cursor);
+                self.selected_index = 0;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.filter_menu_cursor < 5 {
+                    self.filter_menu_cursor += 1;
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.filter_menu_cursor = self.filter_menu_cursor.saturating_sub(1);
+            }
+            KeyCode::Char('r') => {
+                self.filter_risk = [true; 4];
+                self.filter_restore = [true; 2];
+                self.selected_index = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// Toggle a filter option by menu index (0-3: risk levels, 4-5: restore kinds).
+    fn toggle_filter_option(&mut self, idx: usize) {
+        match idx {
+            0 => self.filter_risk[0] = !self.filter_risk[0],
+            1 => self.filter_risk[1] = !self.filter_risk[1],
+            2 => self.filter_risk[2] = !self.filter_risk[2],
+            3 => self.filter_risk[3] = !self.filter_risk[3],
+            4 => self.filter_restore[0] = !self.filter_restore[0],
+            5 => self.filter_restore[1] = !self.filter_restore[1],
+            _ => {}
+        }
+    }
+
     /// Show a flash message in the status bar for a number of ticks.
     pub(crate) fn set_flash(&mut self, text: impl Into<String>, level: FlashLevel) {
         self.flash_message = Some((text.into(), level));
@@ -673,6 +744,11 @@ impl App {
         self.filter_active = false;
         self.filter_query.clear();
         self.filter_cursor = 0;
+    }
+
+    /// Whether any structured filter is active (not all options enabled).
+    pub fn has_structured_filter(&self) -> bool {
+        !self.filter_risk.iter().all(|&v| v) || !self.filter_restore.iter().all(|&v| v)
     }
 
     /// Return from FileBrowser to the originating view, restoring the saved index.
@@ -914,6 +990,11 @@ impl App {
             View::FlatView => views::flat_view::render(self, frame),
             View::FileBrowser => views::file_browser::render(self, frame),
         }
+
+        // Overlay: filter menu popup
+        if self.filter_menu_open {
+            views::filter_menu::render(self, frame);
+        }
     }
 
     /// Build an App with controlled state for testing (no scanning, no config).
@@ -932,6 +1013,10 @@ impl App {
             filter_active: false,
             filter_query: String::new(),
             filter_cursor: 0,
+            filter_menu_open: false,
+            filter_menu_cursor: 0,
+            filter_risk: [true; 4],
+            filter_restore: [true; 2],
             scan_rx: rx,
             scan_tx: tx,
             tick_count: 0,

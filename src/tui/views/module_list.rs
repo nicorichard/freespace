@@ -1,5 +1,6 @@
 // Module list view (main screen).
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -8,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{matches_filter, App, ModuleStatus, ScanStatus, View};
+use crate::app::{matches_filter, matches_structured_filter, App, ModuleStatus, ScanStatus, View};
 use crate::tui::widgets::{
     checkbox_str, cmp_size_desc, format_size, format_size_or_placeholder, is_checkbox_click,
     module_icon, render_view_status_bar, CheckState, SPINNER_CHARS,
@@ -166,8 +167,8 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
 /// Sort module indices by size descending. 0 B modules sink to the bottom.
 fn sort_modules(app: &App, indices: &mut [usize]) {
     indices.sort_by(|&a, &b| {
-        let size_a = app.modules[a].total_size;
-        let size_b = app.modules[b].total_size;
+        let size_a = filtered_module_size(app, a);
+        let size_b = filtered_module_size(app, b);
 
         // 0 B items sink to the bottom
         let a_empty = size_a == Some(0);
@@ -196,7 +197,8 @@ pub fn sorted_module_indices(app: &App) -> Vec<usize> {
                 &app.filter_query,
             )
         })
-        .filter(|&i| app.modules[i].total_size != Some(0))
+        .filter(|&i| passes_structured_filter_module(app, i))
+        .filter(|&i| filtered_module_size(app, i) != Some(0))
         .collect();
     sort_modules(app, &mut indices);
     indices
@@ -212,9 +214,80 @@ pub fn all_sorted_module_indices(app: &App) -> Vec<usize> {
                 &app.filter_query,
             )
         })
+        .filter(|&i| passes_structured_filter_module(app, i))
         .collect();
     sort_modules(app, &mut indices);
     indices
+}
+
+/// Check if a module has any item passing the structured filter, or is still loading.
+fn passes_structured_filter_module(app: &App, idx: usize) -> bool {
+    if !app.has_structured_filter() {
+        return true;
+    }
+    let ms = &app.modules[idx];
+    if ms.items.is_empty() {
+        return true; // still scanning
+    }
+    ms.items.iter().any(|item| {
+        matches_structured_filter(
+            item.risk_level,
+            item.restore_kind,
+            &app.filter_risk,
+            &app.filter_restore,
+        )
+    })
+}
+
+/// Compute filtered module size (sum of matching items only when structured filter is active).
+pub fn filtered_module_size(app: &App, idx: usize) -> Option<u64> {
+    let ms = &app.modules[idx];
+    if !app.has_structured_filter() {
+        return ms.total_size;
+    }
+    let mut total = 0u64;
+    let mut any_sized = false;
+    for item in &ms.items {
+        if matches_structured_filter(
+            item.risk_level,
+            item.restore_kind,
+            &app.filter_risk,
+            &app.filter_restore,
+        ) {
+            if let Some(size) = item.size {
+                total += size;
+                any_sized = true;
+            }
+        }
+    }
+    if any_sized {
+        Some(total)
+    } else {
+        ms.total_size
+    }
+}
+
+/// Compute filtered deduped total across all modules (each unique path counted once).
+fn filtered_deduped_total(app: &App) -> u64 {
+    let mut seen = HashSet::new();
+    let mut total = 0u64;
+    for ms in &app.modules {
+        for item in &ms.items {
+            if matches_structured_filter(
+                item.risk_level,
+                item.restore_kind,
+                &app.filter_risk,
+                &app.filter_restore,
+            ) {
+                if let Some(size) = item.size {
+                    if seen.insert(&item.path) {
+                        total += size;
+                    }
+                }
+            }
+        }
+    }
+    total
 }
 
 /// Handle click events for the module list view.
@@ -280,7 +353,11 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 }
 
 fn render_title_bar(app: &mut App, frame: &mut Frame, area: Rect) {
-    let total = app.deduped_total;
+    let total = if app.has_structured_filter() {
+        filtered_deduped_total(app)
+    } else {
+        app.deduped_total
+    };
 
     let disk_suffix: Vec<Span> = match (app.disk_free, app.disk_total) {
         (Some(free), Some(total)) => vec![
@@ -388,7 +465,8 @@ fn render_module_table(app: &mut App, frame: &mut Frame, area: Rect) {
 
         let ms = &app.modules[module_idx];
         let icon = module_icon(&ms.module.name);
-        let is_empty = ms.total_size == Some(0);
+        let display_size = filtered_module_size(app, module_idx);
+        let is_empty = display_size == Some(0);
         let dim_style = app.theme.style_border(); // mid-gray for 0 B modules
         let text_style = if is_empty {
             dim_style
@@ -445,7 +523,7 @@ fn render_module_table(app: &mut App, frame: &mut Frame, area: Rect) {
                     app.theme.style_size()
                 };
                 Cell::from(Span::styled(
-                    format_size_or_placeholder(ms.total_size),
+                    format_size_or_placeholder(display_size),
                     size_style,
                 ))
             }
@@ -526,6 +604,7 @@ fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect) {
         app.flash_message.as_ref().map(|(m, l)| (m.as_str(), l)),
         app.filter_active,
         &app.filter_query,
+        app.has_structured_filter(),
         shown,
         total,
         &[
@@ -533,7 +612,8 @@ fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect) {
             ("a", "all"),
             ("n", "none"),
             ("i", "info"),
-            ("/", "filter"),
+            ("/", "search"),
+            ("f", "filter"),
             ("c", "clean"),
             ("tab", "all items"),
             ("?", "help"),

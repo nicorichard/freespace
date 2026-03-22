@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{matches_filter, App, ItemType, ScanStatus, View};
+use crate::app::{matches_filter, matches_structured_filter, App, ItemType, ScanStatus, View};
 use crate::tui::widgets::{
     checkbox_str, cmp_size_desc, format_size, is_checkbox_click, render_view_status_bar,
     SPINNER_CHARS,
@@ -165,6 +165,14 @@ pub fn sorted_flat_items(app: &App) -> Vec<(usize, usize)> {
                 {
                     continue;
                 }
+            }
+            if !matches_structured_filter(
+                item.risk_level,
+                item.restore_kind,
+                &app.filter_risk,
+                &app.filter_restore,
+            ) {
+                continue;
             }
             items.push((mi, ii));
         }
@@ -407,6 +415,7 @@ fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect, sorted: &[(us
         app.flash_message.as_ref().map(|(m, l)| (m.as_str(), l)),
         app.filter_active,
         &app.filter_query,
+        app.has_structured_filter(),
         sorted.len(),
         total,
         &[
@@ -414,7 +423,8 @@ fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect, sorted: &[(us
             ("a", "all"),
             ("n", "none"),
             ("o", "open"),
-            ("/", "filter"),
+            ("/", "search"),
+            ("f", "filter"),
             ("c", "clean"),
             ("tab", "modules"),
             ("?", "help"),

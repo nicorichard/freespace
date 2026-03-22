@@ -405,6 +405,7 @@ fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect, _module_idx: 
         app.flash_message.as_ref().map(|(m, l)| (m.as_str(), l)),
         app.filter_active,
         &app.filter_query,
+        app.has_structured_filter(),
         shown,
         items.len(),
         &[
@@ -412,7 +413,8 @@ fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect, _module_idx: 
             ("a", "all"),
             ("n", "none"),
             ("o", "open"),
-            ("/", "filter"),
+            ("/", "search"),
+            ("f", "filter"),
             ("c", "clean"),
             ("esc", "back"),
             ("?", "help"),
