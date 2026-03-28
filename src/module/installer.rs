@@ -606,6 +606,8 @@ path = "~/test"
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
             tags: vec![],
+            icon: None,
+            icon_color: None,
             targets: vec![],
         };
 
@@ -648,6 +650,8 @@ path = "~/test"
             author: "tester".to_string(),
             platforms: vec![],
             tags: vec![],
+            icon: None,
+            icon_color: None,
             targets: vec![],
         };
 

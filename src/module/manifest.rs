@@ -95,6 +95,8 @@ pub struct Module {
     pub author: String,
     pub platforms: Vec<String>,
     pub tags: Vec<String>,
+    pub icon: Option<String>,
+    pub icon_color: Option<String>,
     pub targets: Vec<Target>,
 }
 
@@ -109,6 +111,8 @@ struct RawModule {
     platforms: Vec<String>,
     #[serde(default)]
     tags: Vec<String>,
+    icon: Option<String>,
+    icon_color: Option<String>,
     targets: Vec<RawTarget>,
 }
 
@@ -130,6 +134,10 @@ impl Module {
     pub fn parse(toml_str: &str) -> Result<Module> {
         let raw: RawModule = toml::from_str(toml_str)?;
         validate_id(&raw.id)?;
+
+        if let Some(ref icon) = raw.icon {
+            validate_icon(icon)?;
+        }
 
         let mut targets = Vec::with_capacity(raw.targets.len());
         for raw_target in raw.targets {
@@ -170,8 +178,30 @@ impl Module {
             author: raw.author,
             platforms: raw.platforms,
             tags: raw.tags,
+            icon: raw.icon,
+            icon_color: raw.icon_color,
             targets,
         })
+    }
+}
+
+/// Validate that an icon is a single Nerd Font glyph (Private Use Area).
+fn validate_icon(icon: &str) -> Result<()> {
+    let mut chars = icon.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) => {
+            let cp = c as u32;
+            if matches!(cp, 0xE000..=0xF8FF | 0xF0000..=0xF1AF0) {
+                Ok(())
+            } else {
+                bail!(
+                    "icon U+{:04X} is not a Nerd Font glyph; must be in PUA range U+E000-U+F8FF or U+F0000-U+F1AF0",
+                    cp
+                );
+            }
+        }
+        (None, _) => bail!("icon must not be empty"),
+        _ => bail!("icon must be a single character"),
     }
 }
 
@@ -532,6 +562,102 @@ mod tests {
     fn parse_missing_tags_defaults_to_empty() {
         let module = Module::parse(valid_global_toml()).unwrap();
         assert!(module.tags.is_empty());
+    }
+
+    // --- icon validation ---
+
+    #[test]
+    fn parse_nerd_font_icon() {
+        let icon = "\u{e7a8}"; // Rust icon (Nerd Font)
+        let toml_str = format!(
+            r#"
+        id = "icon-test"
+        name = "icon-test"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+        icon = "{icon}"
+        targets = []
+        "#
+        );
+        let module = Module::parse(&toml_str).unwrap();
+        assert_eq!(module.icon.as_deref(), Some("\u{e7a8}"));
+    }
+
+    #[test]
+    fn parse_icon_color() {
+        let icon = "\u{e7a8}";
+        let toml_str = format!(
+            r##"
+        id = "color-test"
+        name = "color-test"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+        icon = "{icon}"
+        icon_color = "#CE422B"
+        targets = []
+        "##
+        );
+        let module = Module::parse(&toml_str).unwrap();
+        assert_eq!(module.icon_color.as_deref(), Some("#CE422B"));
+    }
+
+    #[test]
+    fn parse_missing_icon_defaults_to_none() {
+        let module = Module::parse(valid_global_toml()).unwrap();
+        assert!(module.icon.is_none());
+        assert!(module.icon_color.is_none());
+    }
+
+    #[test]
+    fn parse_rejects_emoji_icon() {
+        let toml_str = r#"
+        id = "emoji"
+        name = "emoji"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+        icon = "🐳"
+        targets = []
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains("Nerd Font"));
+    }
+
+    #[test]
+    fn parse_rejects_multi_char_icon() {
+        let toml_str = r#"
+        id = "multi"
+        name = "multi"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+        icon = "ab"
+        targets = []
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains("single character"));
+    }
+
+    #[test]
+    fn parse_rejects_empty_icon() {
+        let toml_str = r#"
+        id = "empty-icon"
+        name = "empty-icon"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+        icon = ""
+        targets = []
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains("empty"));
     }
 
     #[test]

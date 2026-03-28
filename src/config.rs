@@ -15,6 +15,19 @@ pub enum ConfigError {
     SerializeError(#[from] toml::ser::Error),
 }
 
+/// Icon display settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct IconsConfig {
+    pub enabled: bool,
+}
+
+impl Default for IconsConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 /// Application-level configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -26,6 +39,7 @@ pub struct AppConfig {
     pub audit_log: bool,
     pub protected_paths: Vec<String>,
     pub enforce_scope: bool,
+    pub icons: IconsConfig,
 }
 
 impl Default for AppConfig {
@@ -37,6 +51,7 @@ impl Default for AppConfig {
             audit_log: true,
             protected_paths: Vec::new(),
             enforce_scope: true,
+            icons: IconsConfig::default(),
         }
     }
 }
@@ -155,6 +170,23 @@ mod tests {
         assert!(config.search_dirs.is_empty());
         assert!(config.audit_log);
         assert!(config.protected_paths.is_empty());
+        assert!(config.icons.enabled);
+    }
+
+    #[test]
+    fn parse_icons_config() {
+        let toml_str = r#"
+        [icons]
+        enabled = false
+        "#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.icons.enabled);
+    }
+
+    #[test]
+    fn parse_icons_defaults_to_enabled() {
+        let config: AppConfig = toml::from_str("").unwrap();
+        assert!(config.icons.enabled);
     }
 
     #[test]

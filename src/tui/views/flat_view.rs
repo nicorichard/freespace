@@ -9,7 +9,7 @@ use ratatui::Frame;
 use crate::app::{matches_filter, matches_structured_filter, App, ItemType, ScanStatus, View};
 use crate::tui::widgets::{
     checkbox_str, cmp_size_desc, format_size, is_checkbox_click, render_view_status_bar,
-    SPINNER_CHARS,
+    ICON_FOLDER, SPINNER_CHARS,
 };
 
 /// Number of items to jump when pressing Page Up/Down.
@@ -348,10 +348,17 @@ fn render_items_table(app: &mut App, frame: &mut Frame, area: Rect, sorted: &[(u
 
             // Item name with folder icon
             let display_name = match item.item_type {
-                ItemType::Directory => format!("\u{1f4c1} {}", item.name),
+                ItemType::Directory if app.icons_enabled => {
+                    format!("{} {}/", ICON_FOLDER, item.name)
+                }
+                ItemType::Directory => format!("{}/", item.name),
                 ItemType::File => item.name.clone(),
             };
-            let name_cell = Cell::from(Span::styled(display_name, app.theme.style_normal()));
+            let name_style = match item.item_type {
+                ItemType::Directory => app.theme.style_directory(),
+                ItemType::File => app.theme.style_normal(),
+            };
+            let name_cell = Cell::from(Span::styled(display_name, name_style));
 
             // Module name (dimmed)
             let module_cell = Cell::from(Span::styled(
@@ -449,6 +456,8 @@ mod tests {
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
             tags: vec![],
+            icon: None,
+            icon_color: None,
             targets: vec![Target {
                 paths: vec!["~/test".to_string()],
                 description: None,
