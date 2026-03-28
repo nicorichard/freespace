@@ -13,7 +13,7 @@ use crate::app::{matches_filter, matches_structured_filter, App, ItemType, Modul
 use crate::module::manifest::RiskLevel;
 use crate::tui::widgets::{
     checkbox_str, cmp_size_desc, format_size, format_size_or_placeholder, is_checkbox_click,
-    module_icon, render_view_status_bar,
+    parse_hex_color, render_view_status_bar, ICON_DEFAULT_MODULE, ICON_FOLDER,
 };
 
 /// Number of items to jump when pressing Page Up/Down.
@@ -375,17 +375,34 @@ pub fn render(app: &mut App, frame: &mut Frame, module_idx: usize) {
 
 fn render_title_bar(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usize) {
     let ms = &app.modules[module_idx];
-    let icon = module_icon(&ms.module.name);
+    let icon = if app.icons_enabled {
+        ms.module.icon.as_deref().unwrap_or(ICON_DEFAULT_MODULE)
+    } else {
+        ""
+    };
 
     let size_text = match &ms.status {
         ModuleStatus::Loading | ModuleStatus::Discovering => "calculating...".to_string(),
         ModuleStatus::Error(e) => format!("Error: {}", e),
         ModuleStatus::Ready => format_size_or_placeholder(ms.total_size),
     };
-    let title_text = format!(" {} {} \u{2014} {} ", icon, ms.module.name, size_text);
+    let header_style = app.theme.style_header();
+    let icon_style = ms
+        .module
+        .icon_color
+        .as_deref()
+        .and_then(parse_hex_color)
+        .map(|c| header_style.fg(c))
+        .unwrap_or(header_style);
 
     let lines = vec![
-        Line::from(vec![Span::styled(title_text, app.theme.style_header())]),
+        Line::from(vec![
+            Span::styled(format!(" {} ", icon), icon_style),
+            Span::styled(
+                format!("{} \u{2014} {} ", ms.module.name, size_text),
+                header_style,
+            ),
+        ]),
         Line::from(vec![Span::styled(
             format!(" {}", ms.module.description),
             app.theme.style_description(),
@@ -475,16 +492,23 @@ fn render_items_table(app: &mut App, frame: &mut Frame, area: Rect, module_idx: 
         ));
 
         let display_name = match item.item_type {
-            ItemType::Directory => format!("\u{1f4c1} {}", item.name),
+            ItemType::Directory if app.icons_enabled => {
+                format!("{} {}/", ICON_FOLDER, item.name)
+            }
+            ItemType::Directory => format!("{}/", item.name),
             ItemType::File => item.name.clone(),
+        };
+        let name_style = match item.item_type {
+            ItemType::Directory => app.theme.style_directory(),
+            ItemType::File => app.theme.style_normal(),
         };
         let name_cell = if item.is_shared {
             Cell::from(Line::from(vec![
-                Span::styled(display_name, app.theme.style_normal()),
+                Span::styled(display_name, name_style),
                 Span::styled(" (shared)", app.theme.style_description()),
             ]))
         } else {
-            Cell::from(Span::styled(display_name, app.theme.style_normal()))
+            Cell::from(Span::styled(display_name, name_style))
         };
 
         let size_cell = match item.size {
@@ -704,6 +728,8 @@ mod tests {
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
             tags: vec![],
+            icon: None,
+            icon_color: None,
             targets: vec![Target {
                 paths: vec!["~/test".to_string()],
                 description: None,
@@ -785,6 +811,8 @@ mod tests {
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
             tags: vec![],
+            icon: None,
+            icon_color: None,
             targets: vec![],
         };
         let ms = ModuleState {

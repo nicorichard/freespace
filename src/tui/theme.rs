@@ -17,6 +17,7 @@ pub struct Theme {
     pub warning_fg: Color,
     pub status_loading: Color,
     pub description: Color,
+    pub directory_fg: Color,
 }
 
 impl Default for Theme {
@@ -36,6 +37,7 @@ impl Default for Theme {
             warning_fg: Color::Indexed(214),    // orange
             status_loading: Color::Indexed(75), // blue (in progress)
             description: Color::Indexed(244),   // lighter gray, readable but unobtrusive
+            directory_fg: Color::Indexed(247),  // slightly dimmer than foreground
         }
     }
 }
@@ -92,5 +94,10 @@ impl Theme {
     /// Style for module/target description text.
     pub fn style_description(&self) -> Style {
         Style::default().fg(self.description)
+    }
+
+    /// Style for directory names (muted blue, like `ls --color`).
+    pub fn style_directory(&self) -> Style {
+        Style::default().fg(self.directory_fg)
     }
 }

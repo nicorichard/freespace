@@ -77,22 +77,21 @@ pub fn render_status_line(frame: &mut Frame, area: Rect, left: Line<'_>, theme: 
     );
 }
 
-/// Get an emoji icon for a module based on its name.
-pub fn module_icon(name: &str) -> &'static str {
-    let lower = name.to_lowercase();
-    if lower.contains("xcode") {
-        "\u{1f528}" // 🔨
-    } else if lower.contains("npm") || lower.contains("yarn") || lower.contains("pnpm") {
-        "\u{1f4e6}" // 📦
-    } else if lower.contains("homebrew") || lower.contains("brew") {
-        "\u{1f37a}" // 🍺
-    } else if lower.contains("docker") {
-        "\u{1f433}" // 🐳
-    } else if lower.contains("cache") {
-        "\u{1f5c2}\u{fe0f}" // 🗂️
-    } else {
-        "\u{1f4c1}" // 📁
+/// Nerd Font glyph constants for file/directory display.
+pub const ICON_FOLDER: &str = "\u{f07b}"; // nf-fa-folder
+pub const ICON_FILE: &str = "\u{f15b}"; // nf-fa-file
+pub const ICON_DEFAULT_MODULE: &str = "\u{f07c}"; // nf-fa-folder_open
+
+/// Parse a hex color string (e.g. "#2496ED") into a ratatui Color.
+pub fn parse_hex_color(hex: &str) -> Option<ratatui::style::Color> {
+    let hex = hex.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
     }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some(ratatui::style::Color::Rgb(r, g, b))
 }
 
 /// Selection state for a checkbox (module or item level).
@@ -262,36 +261,6 @@ mod tests {
             normalize_emacs_key(KeyCode::Char('n'), KeyModifiers::NONE),
             KeyCode::Char('n')
         );
-    }
-
-    #[test]
-    fn module_icon_xcode() {
-        assert_eq!(module_icon("Xcode Derived Data"), "\u{1f528}");
-    }
-
-    #[test]
-    fn module_icon_npm() {
-        assert_eq!(module_icon("npm-cache"), "\u{1f4e6}");
-    }
-
-    #[test]
-    fn module_icon_docker() {
-        assert_eq!(module_icon("Docker"), "\u{1f433}");
-    }
-
-    #[test]
-    fn module_icon_homebrew() {
-        assert_eq!(module_icon("Homebrew"), "\u{1f37a}");
-    }
-
-    #[test]
-    fn module_icon_cache_generic() {
-        assert_eq!(module_icon("pip-cache"), "\u{1f5c2}\u{fe0f}");
-    }
-
-    #[test]
-    fn module_icon_unknown() {
-        assert_eq!(module_icon("something-random"), "\u{1f4c1}");
     }
 
     #[test]

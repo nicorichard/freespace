@@ -10,8 +10,8 @@ use ratatui::Frame;
 
 use crate::app::{matches_filter, App, ItemType, View};
 use crate::tui::widgets::{
-    checkbox_str, cmp_size_desc, format_size, is_checkbox_click, module_icon,
-    render_view_status_bar,
+    checkbox_str, cmp_size_desc, format_size, is_checkbox_click, parse_hex_color,
+    render_view_status_bar, ICON_DEFAULT_MODULE, ICON_FOLDER,
 };
 
 /// Number of items to jump when pressing Page Up/Down.
@@ -257,17 +257,28 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
 fn render_title_bar(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usize) {
     let ms = &app.modules[module_idx];
-    let icon = module_icon(&ms.module.name);
+    let icon = if app.icons_enabled {
+        ms.module.icon.as_deref().unwrap_or(ICON_DEFAULT_MODULE)
+    } else {
+        ""
+    };
 
     // Breadcrumb: module > dir1 > dir2
     let mut parts = vec![ms.module.name.clone()];
     parts.extend(app.drill.breadcrumb_parts());
-    let title_text = format!(" {} {} ", icon, parts.join(" > "));
+    let header_style = app.theme.style_header();
+    let icon_style = ms
+        .module
+        .icon_color
+        .as_deref()
+        .and_then(parse_hex_color)
+        .map(|c| header_style.fg(c))
+        .unwrap_or(header_style);
 
-    let lines = vec![Line::from(vec![Span::styled(
-        title_text,
-        app.theme.style_header(),
-    )])];
+    let lines = vec![Line::from(vec![
+        Span::styled(format!(" {} ", icon), icon_style),
+        Span::styled(format!("{} ", parts.join(" > ")), header_style),
+    ])];
 
     let title = Paragraph::new(lines).block(
         Block::default()
@@ -324,10 +335,17 @@ fn render_items_table(app: &mut App, frame: &mut Frame, area: Rect) {
         ));
 
         let display_name = match item.item_type {
-            ItemType::Directory => format!("\u{1f4c1} {}", item.name),
+            ItemType::Directory if app.icons_enabled => {
+                format!("{} {}/", ICON_FOLDER, item.name)
+            }
+            ItemType::Directory => format!("{}/", item.name),
             ItemType::File => item.name.clone(),
         };
-        let name_cell = Cell::from(Span::styled(display_name, app.theme.style_normal()));
+        let name_style = match item.item_type {
+            ItemType::Directory => app.theme.style_directory(),
+            ItemType::File => app.theme.style_normal(),
+        };
+        let name_cell = Cell::from(Span::styled(display_name, name_style));
 
         let size_cell = match item.size {
             Some(size) => Cell::from(Span::styled(format_size(size), app.theme.style_size())),

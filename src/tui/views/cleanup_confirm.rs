@@ -558,6 +558,8 @@ mod tests {
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
             tags: vec![],
+            icon: None,
+            icon_color: None,
             targets: vec![Target {
                 paths: vec!["~/test".to_string()],
                 description: None,

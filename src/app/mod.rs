@@ -115,6 +115,8 @@ pub struct App {
     pub view_offset: usize,
     /// Last left-click position and time, for double-click detection.
     last_click: Option<(Instant, u16, u16)>,
+    /// Whether to display icons (from config).
+    pub icons_enabled: bool,
 }
 
 impl App {
@@ -193,6 +195,7 @@ impl App {
             confirm_checked: BTreeSet::new(),
             view_offset: 0,
             last_click: None,
+            icons_enabled: config.icons.enabled,
         }
     }
 
@@ -1040,6 +1043,7 @@ impl App {
             confirm_checked: BTreeSet::new(),
             view_offset: 0,
             last_click: None,
+            icons_enabled: true,
         }
     }
 }
@@ -1080,6 +1084,8 @@ mod tests {
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
             tags: vec![],
+            icon: None,
+            icon_color: None,
             targets: vec![Target {
                 paths: vec!["~/test".to_string()],
                 description: None,

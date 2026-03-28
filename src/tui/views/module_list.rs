@@ -12,7 +12,7 @@ use ratatui::Frame;
 use crate::app::{matches_filter, matches_structured_filter, App, ModuleStatus, ScanStatus, View};
 use crate::tui::widgets::{
     checkbox_str, cmp_size_desc, format_size, format_size_or_placeholder, is_checkbox_click,
-    module_icon, render_view_status_bar, CheckState, SPINNER_CHARS,
+    parse_hex_color, render_view_status_bar, CheckState, ICON_DEFAULT_MODULE, SPINNER_CHARS,
 };
 
 /// Number of items to jump when pressing Page Up/Down.
@@ -464,7 +464,11 @@ fn render_module_table(app: &mut App, frame: &mut Frame, area: Rect) {
         }
 
         let ms = &app.modules[module_idx];
-        let icon = module_icon(&ms.module.name);
+        let icon = if app.icons_enabled {
+            ms.module.icon.as_deref().unwrap_or(ICON_DEFAULT_MODULE)
+        } else {
+            ""
+        };
         let display_size = filtered_module_size(app, module_idx);
         let is_empty = display_size == Some(0);
         let dim_style = app.theme.style_border(); // mid-gray for 0 B modules
@@ -494,9 +498,16 @@ fn render_module_table(app: &mut App, frame: &mut Frame, area: Rect) {
         };
         let checkbox_cell = Cell::from(Span::styled(checkbox_str(&check_state), text_style));
 
-        // Name cell with icon (no status emoji)
+        // Name cell with icon
+        let icon_style = ms
+            .module
+            .icon_color
+            .as_deref()
+            .and_then(parse_hex_color)
+            .map(|c| text_style.fg(c))
+            .unwrap_or(text_style);
         let name_cell = Cell::from(Line::from(vec![
-            Span::styled(format!("{} ", icon), text_style),
+            Span::styled(format!("{} ", icon), icon_style),
             Span::styled(&ms.module.name, text_style),
         ]));
 
@@ -638,6 +649,8 @@ mod tests {
             author: "tester".to_string(),
             platforms: vec!["macos".to_string()],
             tags: vec![],
+            icon: None,
+            icon_color: None,
             targets: vec![Target {
                 paths: vec!["~/test".to_string()],
                 description: None,
@@ -677,6 +690,8 @@ mod tests {
                 author: "tester".to_string(),
                 platforms: vec!["macos".to_string()],
                 tags: vec![],
+                icon: None,
+                icon_color: None,
                 targets: vec![Target {
                     paths: vec!["~/x".to_string()],
                     description: None,
