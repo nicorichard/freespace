@@ -519,25 +519,21 @@ impl App {
             .spawn();
     }
 
-    /// Spawn a background task to calculate sizes for drill-in items.
+    /// Spawn background tasks to calculate sizes for drill-in items.
+    /// Each item is sized in its own blocking task for parallelism.
     pub(crate) fn spawn_drill_size_scan(&self, drill_depth: usize) {
-        let tx = self.scan_tx.clone();
         let items = self.drill.scan_paths_at_depth(drill_depth);
-        tokio::task::spawn_blocking(move || {
-            for (item_index, path) in items.iter().enumerate() {
-                let size = scanner::calculate_size(path);
-                if tx
-                    .send(ScanMessage::DrillItemSized {
-                        drill_depth,
-                        item_index,
-                        size,
-                    })
-                    .is_err()
-                {
-                    return;
-                }
-            }
-        });
+        for (item_index, path) in items.into_iter().enumerate() {
+            let tx = self.scan_tx.clone();
+            tokio::task::spawn_blocking(move || {
+                let size = scanner::calculate_size(&path);
+                let _ = tx.send(ScanMessage::DrillItemSized {
+                    drill_depth,
+                    item_index,
+                    size,
+                });
+            });
+        }
     }
 
     /// Dispatch key events based on the current view.

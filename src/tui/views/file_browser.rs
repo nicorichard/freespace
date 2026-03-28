@@ -11,7 +11,7 @@ use ratatui::Frame;
 use crate::app::{matches_filter, App, ItemType, View};
 use crate::tui::widgets::{
     checkbox_str, cmp_size_desc, format_size, is_checkbox_click, module_icon,
-    render_view_status_bar, SPINNER_CHARS,
+    render_view_status_bar,
 };
 
 /// Number of items to jump when pressing Page Up/Down.
@@ -296,24 +296,6 @@ fn render_items_table(app: &mut App, frame: &mut Frame, area: Rect) {
     if items.is_empty() {
         let content = Paragraph::new("Empty directory.")
             .style(app.theme.style_normal())
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(app.theme.style_border()),
-            );
-        frame.render_widget(content, area);
-        return;
-    }
-
-    // Show loading indicator until all sizes are known
-    if items.iter().any(|item| item.size.is_none()) {
-        let sized = items.iter().filter(|i| i.size.is_some()).count();
-        let total = items.len();
-        let spinner = SPINNER_CHARS[app.tick_count % SPINNER_CHARS.len()];
-        let loading_text = format!("{} Calculating sizes... {}/{}", spinner, sized, total);
-        let content = Paragraph::new(loading_text)
-            .style(app.theme.style_status_loading())
-            .alignment(ratatui::layout::Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
