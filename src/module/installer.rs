@@ -500,7 +500,7 @@ pub fn read_source_info(module_dir: &Path) -> Option<SourceInfo> {
 /// Status of a single module after checking for updates.
 #[derive(Debug)]
 pub enum UpdateStatus {
-    /// Module was updated to a new version.
+    /// Module was updated (or an update is available) with new commits.
     Updated {
         name: String,
         old_version: String,
@@ -508,7 +508,13 @@ pub enum UpdateStatus {
         old_commit: String,
         new_commit: String,
     },
-    /// Module is already at the latest commit.
+    /// A newer semver tag exists on the remote (module is pinned to a tag).
+    NewerTag {
+        name: String,
+        current_tag: String,
+        latest_tag: String,
+    },
+    /// Module is already at the latest commit/tag.
     UpToDate { name: String },
     /// Module was installed from a local path (symlink) — skip.
     Skipped { name: String, reason: String },
@@ -516,44 +522,44 @@ pub enum UpdateStatus {
     Failed { name: String, reason: String },
 }
 
-/// Check a single installed module for available updates without applying them.
-pub fn check_update(module_dir: &Path) -> UpdateStatus {
+/// Read the module name from an installed module directory.
+fn read_module_name(module_dir: &Path, fallback: &str) -> String {
+    fs::read_to_string(module_dir.join("module.toml"))
+        .ok()
+        .and_then(|c| Module::parse(&c).ok())
+        .map(|m| m.name)
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// Prepare a source identifier and source info for an installed module.
+/// Returns None (with an appropriate UpdateStatus) if the module should be skipped.
+fn prepare_update_source(
+    module_dir: &Path,
+) -> Result<(SourceIdentifier, SourceInfo, String), UpdateStatus> {
     let dir_name = module_dir
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    // Read current source info
-    let source_info = match read_source_info(module_dir) {
-        Some(info) => info,
-        None => {
-            return UpdateStatus::Skipped {
-                name: dir_name,
-                reason: "no source.toml (manually installed?)".to_string(),
-            };
-        }
-    };
+    let source_info = read_source_info(module_dir).ok_or_else(|| UpdateStatus::Skipped {
+        name: dir_name.clone(),
+        reason: "no source.toml (manually installed?)".to_string(),
+    })?;
 
-    // Skip local modules
     if source_info.repository.starts_with("local:") {
-        return UpdateStatus::Skipped {
+        return Err(UpdateStatus::Skipped {
             name: dir_name,
             reason: "local source (symlinked)".to_string(),
-        };
+        });
     }
 
-    // Parse the repository string back into a source identifier
-    let mut source = match SourceIdentifier::parse(&source_info.repository) {
-        Ok(s) => s,
-        Err(e) => {
-            return UpdateStatus::Failed {
-                name: dir_name,
-                reason: format!("failed to parse source: {}", e),
-            };
-        }
-    };
+    let mut source =
+        SourceIdentifier::parse(&source_info.repository).map_err(|e| UpdateStatus::Failed {
+            name: dir_name.clone(),
+            reason: format!("failed to parse source: {}", e),
+        })?;
 
-    // Restore the pinned ref if one was used at install time
+    // Restore the pinned ref from install time
     if let SourceIdentifier::Git {
         ref mut git_ref, ..
     } = source
@@ -561,116 +567,158 @@ pub fn check_update(module_dir: &Path) -> UpdateStatus {
         *git_ref = source_info.git_ref.clone();
     }
 
-    // Clone to temp dir and compare commits
     if check_git_available().is_err() {
-        return UpdateStatus::Failed {
+        return Err(UpdateStatus::Failed {
             name: dir_name,
             reason: "git is not installed".to_string(),
-        };
+        });
     }
 
-    let (temp_dir, new_commit) = match clone_repo(&source) {
-        Ok(r) => r,
-        Err(e) => {
-            return UpdateStatus::Failed {
-                name: dir_name,
-                reason: format!("clone failed: {}", e),
-            };
+    Ok((source, source_info, dir_name))
+}
+
+/// Query the remote for the HEAD (or a specific ref) commit SHA without cloning.
+///
+/// Uses `git ls-remote` which is a single lightweight network roundtrip.
+fn ls_remote_ref(source: &SourceIdentifier, git_ref: Option<&str>) -> Result<String, String> {
+    let urls = source.clone_urls();
+    if urls.is_empty() {
+        return Err("not a git source".to_string());
+    }
+
+    let ref_filter = git_ref.unwrap_or("HEAD");
+
+    for url in &urls {
+        let output = Command::new("git")
+            .args(["ls-remote", url, ref_filter])
+            .output();
+
+        let output = match output {
+            Ok(o) if o.status.success() => o,
+            _ => continue,
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Format: "<sha>\t<refname>\n"
+        if let Some(sha) = stdout.split_whitespace().next() {
+            if !sha.is_empty() {
+                return Ok(sha.to_string());
+            }
         }
+    }
+
+    Err("failed to query remote".to_string())
+}
+
+/// Query the remote for all tags via `git ls-remote --tags`.
+///
+/// Returns a list of (tag_name, sha) pairs. Filters out `^{}` dereferenced entries.
+fn ls_remote_tags(source: &SourceIdentifier) -> Result<Vec<String>, String> {
+    let urls = source.clone_urls();
+    if urls.is_empty() {
+        return Err("not a git source".to_string());
+    }
+
+    for url in &urls {
+        let output = Command::new("git")
+            .args(["ls-remote", "--tags", url])
+            .output();
+
+        let output = match output {
+            Ok(o) if o.status.success() => o,
+            _ => continue,
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let tags: Vec<String> = stdout
+            .lines()
+            .filter_map(|line| {
+                let refname = line.split_whitespace().nth(1)?;
+                // Skip dereferenced tag objects (e.g. refs/tags/v1.0.0^{})
+                if refname.ends_with("^{}") {
+                    return None;
+                }
+                refname.strip_prefix("refs/tags/").map(|t| t.to_string())
+            })
+            .collect();
+
+        return Ok(tags);
+    }
+
+    Err("failed to query remote tags".to_string())
+}
+
+/// Parse a tag name as semver, stripping an optional `v` prefix.
+fn parse_semver_tag(tag: &str) -> Option<semver::Version> {
+    let stripped = tag.strip_prefix('v').unwrap_or(tag);
+    semver::Version::parse(stripped).ok()
+}
+
+/// Check a single installed module for available updates without applying them.
+///
+/// Uses lightweight `git ls-remote` — no cloning required.
+pub fn check_update(module_dir: &Path) -> UpdateStatus {
+    let (source, source_info, dir_name) = match prepare_update_source(module_dir) {
+        Ok(v) => v,
+        Err(status) => return status,
     };
 
-    let _ = fs::remove_dir_all(&temp_dir);
+    let name = read_module_name(module_dir, &dir_name);
 
-    if new_commit == source_info.commit {
-        return UpdateStatus::UpToDate { name: dir_name };
+    // If pinned to a semver tag, check for newer tags
+    if let Some(ref pinned_ref) = source_info.git_ref {
+        if let Some(current_ver) = parse_semver_tag(pinned_ref) {
+            return match ls_remote_tags(&source) {
+                Ok(tags) => {
+                    let latest = tags
+                        .iter()
+                        .filter_map(|t| {
+                            parse_semver_tag(t)
+                                .filter(|v| v.pre.is_empty())
+                                .map(|v| (t, v))
+                        })
+                        .max_by(|a, b| a.1.cmp(&b.1));
+
+                    match latest {
+                        Some((tag, ver)) if ver > current_ver => UpdateStatus::NewerTag {
+                            name,
+                            current_tag: pinned_ref.clone(),
+                            latest_tag: tag.clone(),
+                        },
+                        _ => UpdateStatus::UpToDate { name },
+                    }
+                }
+                Err(e) => UpdateStatus::Failed { name, reason: e },
+            };
+        }
     }
 
-    // Read the module name from manifest
-    let name = module_dir
-        .join("module.toml")
-        .exists()
-        .then(|| {
-            fs::read_to_string(module_dir.join("module.toml"))
-                .ok()
-                .and_then(|c| Module::parse(&c).ok())
-                .map(|m| m.name)
-        })
-        .flatten()
-        .unwrap_or(dir_name);
-
-    let old_version = module_dir
-        .join("module.toml")
-        .exists()
-        .then(|| {
-            fs::read_to_string(module_dir.join("module.toml"))
-                .ok()
-                .and_then(|c| Module::parse(&c).ok())
-                .map(|m| m.version)
-        })
-        .flatten()
-        .unwrap_or_default();
-
-    UpdateStatus::Updated {
-        name,
-        old_version,
-        new_version: String::new(), // not known until actual update
-        old_commit: source_info.commit,
-        new_commit,
+    // Unpinned or non-semver ref: compare commit SHAs
+    let ref_to_check = source_info.git_ref.as_deref();
+    match ls_remote_ref(&source, ref_to_check) {
+        Ok(remote_sha) => {
+            if remote_sha == source_info.commit {
+                UpdateStatus::UpToDate { name }
+            } else {
+                UpdateStatus::Updated {
+                    name,
+                    old_version: String::new(),
+                    new_version: String::new(),
+                    old_commit: source_info.commit,
+                    new_commit: remote_sha,
+                }
+            }
+        }
+        Err(e) => UpdateStatus::Failed { name, reason: e },
     }
 }
 
 /// Update a single installed module from its source. Returns the update status.
 pub fn update_module(module_dir: &Path, modules_dir: &Path) -> UpdateStatus {
-    let dir_name = module_dir
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    // Read current source info
-    let source_info = match read_source_info(module_dir) {
-        Some(info) => info,
-        None => {
-            return UpdateStatus::Skipped {
-                name: dir_name,
-                reason: "no source.toml (manually installed?)".to_string(),
-            };
-        }
+    let (source, source_info, dir_name) = match prepare_update_source(module_dir) {
+        Ok(v) => v,
+        Err(status) => return status,
     };
-
-    // Skip local modules
-    if source_info.repository.starts_with("local:") {
-        return UpdateStatus::Skipped {
-            name: dir_name,
-            reason: "local source (symlinked)".to_string(),
-        };
-    }
-
-    // Parse the repository string back into a source identifier
-    let mut source = match SourceIdentifier::parse(&source_info.repository) {
-        Ok(s) => s,
-        Err(e) => {
-            return UpdateStatus::Failed {
-                name: dir_name,
-                reason: format!("failed to parse source: {}", e),
-            };
-        }
-    };
-
-    // Restore the pinned ref if one was used at install time
-    if let SourceIdentifier::Git {
-        ref mut git_ref, ..
-    } = source
-    {
-        *git_ref = source_info.git_ref.clone();
-    }
-
-    // Clone to temp dir
-    if check_git_available().is_err() {
-        return UpdateStatus::Failed {
-            name: dir_name,
-            reason: "git is not installed".to_string(),
-        };
-    }
 
     let (temp_dir, new_commit) = match clone_repo(&source) {
         Ok(r) => r,

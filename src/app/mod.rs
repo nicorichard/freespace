@@ -117,6 +117,8 @@ pub struct App {
     last_click: Option<(Instant, u16, u16)>,
     /// Whether to display icons (from config).
     pub icons_enabled: bool,
+    /// Cancel token for the in-progress scan tasks.
+    scan_cancel: Arc<AtomicBool>,
 }
 
 impl App {
@@ -143,11 +145,11 @@ impl App {
         let manifests: Vec<Module> = modules.iter().map(|ms| ms.module.clone()).collect();
 
         // Start background scan
-        let scan_status = if manifests.is_empty() {
-            ScanStatus::Complete
+        let (scan_status, scan_cancel) = if manifests.is_empty() {
+            (ScanStatus::Complete, Arc::new(AtomicBool::new(false)))
         } else {
-            scanner::start_scan(manifests, tx.clone(), search_dirs);
-            ScanStatus::Scanning
+            let cancel = scanner::start_scan(manifests, tx.clone(), search_dirs);
+            (ScanStatus::Scanning, cancel)
         };
 
         let (disk_total, disk_free) = disk_stats().unzip();
@@ -196,6 +198,7 @@ impl App {
             view_offset: 0,
             last_click: None,
             icons_enabled: config.icons.enabled,
+            scan_cancel,
         }
     }
 
@@ -367,6 +370,10 @@ impl App {
             }
         }
 
+        // Signal scan tasks to stop so the runtime shuts down quickly.
+        self.scan_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
         Ok(())
     }
 
@@ -528,8 +535,12 @@ impl App {
         let items = self.drill.scan_paths_at_depth(drill_depth);
         for (item_index, path) in items.into_iter().enumerate() {
             let tx = self.scan_tx.clone();
+            let cancel = self.scan_cancel.clone();
             tokio::task::spawn_blocking(move || {
-                let size = scanner::calculate_size(&path);
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                let size = scanner::calculate_size_cancellable(&path, Some(&cancel));
                 let _ = tx.send(ScanMessage::DrillItemSized {
                     drill_depth,
                     item_index,
@@ -1044,6 +1055,7 @@ impl App {
             view_offset: 0,
             last_click: None,
             icons_enabled: true,
+            scan_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 }

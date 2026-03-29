@@ -377,6 +377,18 @@ fn cmd_update(modules_dir: &std::path::Path, id: Option<&str>) -> anyhow::Result
                 );
                 updated += 1;
             }
+            module::installer::UpdateStatus::NewerTag {
+                name,
+                current_tag,
+                latest_tag,
+                ..
+            } => {
+                println!(
+                    "{} has newer tag available ({} -> {}). Reinstall with: freespace module install {}@{}",
+                    name, current_tag, latest_tag, name, latest_tag
+                );
+                skipped += 1;
+            }
             module::installer::UpdateStatus::UpToDate { .. } => {
                 println!("up to date");
                 up_to_date += 1;
@@ -446,6 +458,15 @@ fn cmd_outdated(modules_dir: &std::path::Path) {
                     name,
                     format_commit_range(&old_commit, &new_commit)
                 );
+                has_updates = true;
+            }
+            module::installer::UpdateStatus::NewerTag {
+                name,
+                current_tag,
+                latest_tag,
+                ..
+            } => {
+                println!("{} has newer tag ({} -> {})", name, current_tag, latest_tag);
                 has_updates = true;
             }
             module::installer::UpdateStatus::UpToDate { .. } => {
