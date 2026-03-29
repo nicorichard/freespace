@@ -169,6 +169,7 @@ impl InstallSelectState {
                 ("esc", "cancel"),
             ],
             &self.theme,
+            false,
         );
         // Combine keybinding bar with selection count
         let mut spans = left.spans;
