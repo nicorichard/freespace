@@ -88,6 +88,6 @@ pub fn render(app: &App, frame: &mut Frame) {
     frame.render_widget(Paragraph::new(lines), content_area);
 
     // Footer with keybinding hints
-    let footer = keybinding_bar(&[("f", "close"), ("r", "reset")], &app.theme);
+    let footer = keybinding_bar(&[("f", "close"), ("r", "reset")], &app.theme, false);
     frame.render_widget(Paragraph::new(footer), footer_area);
 }

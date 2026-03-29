@@ -85,7 +85,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         .alignment(Alignment::Center);
         frame.render_widget(hint, chunks[2]);
 
-        let bar = keybinding_bar(&[("q", "quit"), ("any", "continue")], &app.theme);
+        let bar = keybinding_bar(&[("q", "quit"), ("any", "continue")], &app.theme, false);
         render_status_line(frame, chunks[4], bar, &app.theme);
     } else {
         // In-progress
@@ -107,7 +107,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             frame.render_widget(file_line, chunks[2]);
         }
 
-        let bar = keybinding_bar(&[("esc", "halt")], &app.theme);
+        let bar = keybinding_bar(&[("esc", "halt")], &app.theme, false);
         render_status_line(frame, chunks[4], bar, &app.theme);
     }
 }

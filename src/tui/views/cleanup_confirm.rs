@@ -539,6 +539,7 @@ fn render_action_bar(app: &mut App, frame: &mut Frame, area: Rect, shown: usize,
             ("n", "cancel"),
             ("/", "search"),
         ],
+        false,
     );
 }
 

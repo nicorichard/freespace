@@ -18,6 +18,9 @@ pub struct Theme {
     pub status_loading: Color,
     pub description: Color,
     pub directory_fg: Color,
+    pub clean_ready_fg: Color,
+    pub clean_ready_bg: Color,
+    pub disabled_fg: Color,
 }
 
 impl Default for Theme {
@@ -32,12 +35,15 @@ impl Default for Theme {
             selected_fg: Color::Indexed(255), // bright white
             header_fg: Color::Indexed(75),    // steel blue
             header_bg: Color::Reset,
-            size_fg: Color::Indexed(222),       // light gold/yellow
-            error_fg: Color::Indexed(196),      // red
-            warning_fg: Color::Indexed(214),    // orange
-            status_loading: Color::Indexed(75), // blue (in progress)
-            description: Color::Indexed(244),   // lighter gray, readable but unobtrusive
-            directory_fg: Color::Indexed(247),  // slightly dimmer than foreground
+            size_fg: Color::Indexed(222),        // light gold/yellow
+            error_fg: Color::Indexed(196),       // red
+            warning_fg: Color::Indexed(214),     // orange
+            status_loading: Color::Indexed(75),  // blue (in progress)
+            description: Color::Indexed(244),    // lighter gray, readable but unobtrusive
+            directory_fg: Color::Indexed(247),   // slightly dimmer than foreground
+            clean_ready_fg: Color::Indexed(16),  // near-black text
+            clean_ready_bg: Color::Indexed(154), // bright lime green background
+            disabled_fg: Color::Indexed(240),    // muted gray (matches border)
         }
     }
 }
@@ -99,5 +105,18 @@ impl Theme {
     /// Style for directory names (muted blue, like `ls --color`).
     pub fn style_directory(&self) -> Style {
         Style::default().fg(self.directory_fg)
+    }
+
+    /// Style for disabled/unavailable actions.
+    pub fn style_disabled(&self) -> Style {
+        Style::default().fg(self.disabled_fg)
+    }
+
+    /// Style for the clean action when items are selected — bold inverse pill.
+    pub fn style_clean_ready(&self) -> Style {
+        Style::default()
+            .fg(self.clean_ready_fg)
+            .bg(self.clean_ready_bg)
+            .add_modifier(Modifier::BOLD)
     }
 }

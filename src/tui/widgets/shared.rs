@@ -37,7 +37,11 @@ pub fn cmp_size_desc(a: Option<u64>, b: Option<u64>) -> Ordering {
 /// - Key text inside brackets in the theme's accent (size_fg) color
 /// - Action text in the theme's muted/border color
 /// - Separator `│` in dim border color
-pub fn keybinding_bar<'a>(bindings: &[(&'a str, &'a str)], theme: &Theme) -> Line<'a> {
+pub fn keybinding_bar<'a>(
+    bindings: &[(&'a str, &'a str)],
+    theme: &Theme,
+    can_clean: bool,
+) -> Line<'a> {
     let bracket_style = theme.style_border();
     let key_style = theme.style_size();
     let action_style = theme.style_border();
@@ -50,10 +54,35 @@ pub fn keybinding_bar<'a>(bindings: &[(&'a str, &'a str)], theme: &Theme) -> Lin
         if i > 0 {
             spans.push(Span::styled(" \u{2502} ", sep_style));
         }
-        spans.push(Span::styled("[", bracket_style));
-        spans.push(Span::styled(*key, key_style));
-        spans.push(Span::styled("] ", bracket_style));
-        spans.push(Span::styled(*action, action_style));
+
+        let is_clean = *action == "clean";
+
+        if is_clean && can_clean {
+            // Bright pill-style highlight to make clean really pop
+            let ready = theme.style_clean_ready();
+            spans.push(Span::styled(" [", ready));
+            spans.push(Span::styled(*key, ready));
+            spans.push(Span::styled("]", ready));
+            spans.push(Span::styled("lean ", ready));
+        } else if is_clean {
+            // Muted when nothing is selected
+            let dim = theme.style_disabled();
+            spans.push(Span::styled("[", dim));
+            spans.push(Span::styled(*key, dim));
+            spans.push(Span::styled("]", dim));
+            spans.push(Span::styled("lean", dim));
+        } else {
+            spans.push(Span::styled("[", bracket_style));
+            spans.push(Span::styled(*key, key_style));
+            // Condense: if key matches first char of action, show [k]ey_rest
+            if key.len() == 1 && action.starts_with(*key) {
+                spans.push(Span::styled("]", bracket_style));
+                spans.push(Span::styled(&action[key.len()..], action_style));
+            } else {
+                spans.push(Span::styled("] ", bracket_style));
+                spans.push(Span::styled(*action, action_style));
+            }
+        }
     }
 
     Line::from(spans)
@@ -142,6 +171,7 @@ pub fn render_view_status_bar(
     shown: usize,
     total: usize,
     bindings: &[(&str, &str)],
+    can_clean: bool,
 ) {
     let filter_indicator: Vec<Span> = if has_structured_filter {
         vec![
@@ -172,7 +202,7 @@ pub fn render_view_status_bar(
         spans.extend(filter_indicator);
         Line::from(spans)
     } else {
-        let mut bar = keybinding_bar(bindings, theme);
+        let mut bar = keybinding_bar(bindings, theme, can_clean);
         bar.spans.extend(filter_indicator);
         bar
     };

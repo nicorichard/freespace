@@ -420,5 +420,6 @@ fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect, _module_idx: 
             ("?", "help"),
             ("q", "quit"),
         ],
+        !app.selected_items.is_empty(),
     );
 }
