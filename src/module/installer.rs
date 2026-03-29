@@ -41,7 +41,7 @@ pub struct InstallResult {
 /// Layout of a source directory.
 pub(crate) enum RepoLayout {
     /// module.toml at the root
-    SingleModule { module: Module },
+    SingleModule { module: Box<Module> },
     /// Subdirectories each containing module.toml
     MultiModule { modules: Vec<(String, Module)> },
 }
@@ -344,7 +344,9 @@ pub(crate) fn detect_layout(source_dir: &Path) -> Result<RepoLayout, InstallErro
     let root_manifest = source_dir.join("module.toml");
     if root_manifest.exists() {
         let module = parse_manifest(&root_manifest)?;
-        return Ok(RepoLayout::SingleModule { module });
+        return Ok(RepoLayout::SingleModule {
+            module: Box::new(module),
+        });
     }
 
     // Check subdirectories for module.toml files
