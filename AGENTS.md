@@ -46,7 +46,6 @@ src/
     widgets/
       size_fmt.rs      Human-readable size formatting.
       shared.rs        Reusable widget helpers.
-modules/               Bundled TOML module manifests (docker, npm-cache, xcode, etc.)
 ```
 
 ## Architecture
@@ -67,7 +66,6 @@ Event-driven TUI with background async scanning:
 Modules are declarative TOML manifests — no code execution.
 
 - Default location: `~/.config/freespace/modules/`
-- Bundled defaults in `modules/` directory (installed on first run)
 - Git-distributable: `freespace install <git-url>`
 - Platform-filtered via `platform` field (macos/linux/windows)
 - Use `glob` patterns and `local_target` paths to discover items
