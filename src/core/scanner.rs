@@ -1,6 +1,8 @@
 // Filesystem scanner for discovering items and calculating sizes.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
@@ -67,18 +69,34 @@ fn file_disk_size(metadata: &std::fs::Metadata) -> u64 {
 
 /// Calculate the size of a file or directory.
 /// Uses actual disk usage (not apparent size) to correctly handle sparse files.
+/// Accepts an optional cancel token to abort early.
 pub fn calculate_size(path: &Path) -> u64 {
+    calculate_size_cancellable(path, None)
+}
+
+/// Calculate size with an optional cancellation token.
+/// Returns a partial sum if cancelled.
+pub fn calculate_size_cancellable(path: &Path, cancel: Option<&AtomicBool>) -> u64 {
     if path.is_file() {
         std::fs::metadata(path)
             .map(|m| file_disk_size(&m))
             .unwrap_or(0)
     } else if path.is_dir() {
-        walkdir::WalkDir::new(path)
+        let mut total = 0u64;
+        for entry in walkdir::WalkDir::new(path)
             .into_iter()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            .map(|e| e.metadata().map(|m| file_disk_size(&m)).unwrap_or(0))
-            .sum()
+        {
+            if let Some(c) = cancel {
+                if c.load(Ordering::Relaxed) {
+                    return total;
+                }
+            }
+            if entry.file_type().is_file() {
+                total += entry.metadata().map(|m| file_disk_size(&m)).unwrap_or(0);
+            }
+        }
+        total
     } else {
         0
     }
@@ -128,6 +146,7 @@ fn scan_module(
     module: &Module,
     search_dirs: &[PathBuf],
     tx: &mpsc::UnboundedSender<ScanMessage>,
+    cancel: &AtomicBool,
 ) {
     // Phase 1: Discover all items (fast — no size calculation)
     let mut item_index = 0usize;
@@ -217,7 +236,13 @@ fn scan_module(
 
     // Phase 2: Calculate sizes and send ItemSized messages
     for (idx, path) in paths_to_size {
-        let size = calculate_size(&path);
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        let size = calculate_size_cancellable(&path, Some(cancel));
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
         if tx
             .send(ScanMessage::ItemSized {
                 module_index,
@@ -234,11 +259,13 @@ fn scan_module(
 }
 
 /// Spawn background tasks that scan all modules in parallel and send results via the channel.
+/// The returned `Arc<AtomicBool>` can be set to `true` to cancel scanning early.
 pub fn start_scan(
     modules: Vec<Module>,
     tx: mpsc::UnboundedSender<ScanMessage>,
     search_dirs: Vec<PathBuf>,
-) {
+) -> Arc<AtomicBool> {
+    let cancel = Arc::new(AtomicBool::new(false));
     let search_dirs = std::sync::Arc::new(search_dirs);
     let module_count = modules.len();
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<()>();
@@ -248,8 +275,9 @@ pub fn start_scan(
         let tx = tx.clone();
         let search_dirs = std::sync::Arc::clone(&search_dirs);
         let done_tx = done_tx.clone();
+        let cancel = cancel.clone();
         tokio::task::spawn_blocking(move || {
-            scan_module(module_index, &module, &search_dirs, &tx);
+            scan_module(module_index, &module, &search_dirs, &tx, &cancel);
             let _ = done_tx.send(());
         });
     }
@@ -266,6 +294,8 @@ pub fn start_scan(
         }
         let _ = tx.send(ScanMessage::ScanComplete);
     });
+
+    cancel
 }
 
 #[cfg(test)]
@@ -437,7 +467,7 @@ mod tests {
         };
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        start_scan(vec![module], tx, vec![]);
+        let _cancel = start_scan(vec![module], tx, vec![]);
 
         let mut got_item = false;
         let mut got_sized = false;

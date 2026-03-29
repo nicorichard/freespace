@@ -124,6 +124,11 @@ fn render_metadata(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usi
         .add_modifier(Modifier::BOLD);
     let value_style = app.theme.style_normal();
 
+    // Calculate the available width for value text (area minus label column, borders, padding)
+    let label_col_width: usize = 14;
+    let border_width: usize = 2; // left + right border
+    let value_width = (area.width as usize).saturating_sub(label_col_width + border_width + 1);
+
     let platforms_str = m.platforms.join(", ");
     let targets_str = format!("{}", m.targets.len());
     let manifest_str = ms.manifest_path.as_ref().map(|p| p.display().to_string());
@@ -133,7 +138,13 @@ fn render_metadata(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usi
         metadata_row("Id", &m.id, label_style, value_style),
         metadata_row("Version", &m.version, label_style, value_style),
         metadata_row("Author", &m.author, label_style, value_style),
-        metadata_row("Description", &m.description, label_style, value_style),
+        metadata_row_wrapped(
+            "Description",
+            &m.description,
+            label_style,
+            value_style,
+            value_width,
+        ),
         metadata_row("Platforms", &platforms_str, label_style, value_style),
         metadata_row("Targets", &targets_str, label_style, value_style),
     ];
@@ -192,11 +203,12 @@ fn render_metadata(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usi
     let installed_str;
     if let Some(ref source) = source_info {
         rows.push(Row::new(vec![Span::raw(""), Span::raw("")]));
-        rows.push(metadata_row(
+        rows.push(metadata_row_wrapped(
             "Repository",
             &source.repository,
             label_style,
             value_style,
+            value_width,
         ));
         if let Some(ref git_ref) = source.git_ref {
             rows.push(metadata_row("Ref", git_ref, label_style, value_style));
@@ -224,11 +236,12 @@ fn render_metadata(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usi
     // Show manifest path
     if let Some(ref path_str) = manifest_str {
         rows.push(Row::new(vec![Span::raw(""), Span::raw("")]));
-        rows.push(metadata_row(
+        rows.push(metadata_row_wrapped(
             "Path",
             path_str,
             label_style,
             app.theme.style_description(),
+            value_width,
         ));
     }
 
@@ -272,17 +285,51 @@ fn render_metadata(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usi
     frame.render_widget(table, area);
 }
 
-/// Build a single metadata row with styled label and value.
+/// Build a single metadata row with styled label and value, wrapping the value
+/// text if it exceeds `value_width` characters.
 fn metadata_row<'a>(
     label: &'a str,
     value: &'a str,
     label_style: Style,
     value_style: Style,
 ) -> Row<'a> {
+    metadata_row_wrapped(label, value, label_style, value_style, 0)
+}
+
+/// Build a metadata row, wrapping the value text if `value_width > 0` and the
+/// text is longer than that width.
+fn metadata_row_wrapped<'a>(
+    label: &'a str,
+    value: &'a str,
+    label_style: Style,
+    value_style: Style,
+    value_width: usize,
+) -> Row<'a> {
+    if value_width == 0 || value.len() <= value_width {
+        return Row::new(vec![
+            Span::styled(label, label_style),
+            Span::styled(value, value_style),
+        ]);
+    }
+
+    // Wrap value into multiple lines
+    let mut lines: Vec<Line<'a>> = Vec::new();
+    let chars: Vec<char> = value.chars().collect();
+    let mut start = 0;
+    while start < chars.len() {
+        let end = (start + value_width).min(chars.len());
+        let chunk: String = chars[start..end].iter().collect();
+        lines.push(Line::from(Span::styled(chunk, value_style)));
+        start = end;
+    }
+
+    let height = lines.len();
+    use ratatui::widgets::Cell;
     Row::new(vec![
-        Span::styled(label, label_style),
-        Span::styled(value, value_style),
+        Cell::from(Span::styled(label, label_style)),
+        Cell::from(ratatui::text::Text::from(lines)),
     ])
+    .height(height as u16)
 }
 
 /// Format a Unix epoch timestamp as a human-readable relative time.
