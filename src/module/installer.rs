@@ -54,7 +54,7 @@ pub fn install(source_str: &str, modules_dir: &Path) -> Result<Vec<InstallResult
         .map_err(|e| InstallError::Other(anyhow::anyhow!("{}", e)))?;
 
     match &source {
-        SourceIdentifier::GitHub { .. } => install_from_github(&source, modules_dir),
+        SourceIdentifier::Git { .. } => install_from_github(&source, modules_dir),
         SourceIdentifier::Local { path } => install_from_local(&source, path, modules_dir),
     }
 }
@@ -495,6 +495,276 @@ pub fn read_source_info(module_dir: &Path) -> Option<SourceInfo> {
     let content = fs::read_to_string(path).ok()?;
     let source_file: SourceFile = toml::from_str(&content).ok()?;
     Some(source_file.source)
+}
+
+/// Status of a single module after checking for updates.
+#[derive(Debug)]
+pub enum UpdateStatus {
+    /// Module was updated to a new version.
+    Updated {
+        name: String,
+        old_version: String,
+        new_version: String,
+        old_commit: String,
+        new_commit: String,
+    },
+    /// Module is already at the latest commit.
+    UpToDate { name: String },
+    /// Module was installed from a local path (symlink) — skip.
+    Skipped { name: String, reason: String },
+    /// Error checking or updating this module.
+    Failed { name: String, reason: String },
+}
+
+/// Check a single installed module for available updates without applying them.
+pub fn check_update(module_dir: &Path) -> UpdateStatus {
+    let dir_name = module_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // Read current source info
+    let source_info = match read_source_info(module_dir) {
+        Some(info) => info,
+        None => {
+            return UpdateStatus::Skipped {
+                name: dir_name,
+                reason: "no source.toml (manually installed?)".to_string(),
+            };
+        }
+    };
+
+    // Skip local modules
+    if source_info.repository.starts_with("local:") {
+        return UpdateStatus::Skipped {
+            name: dir_name,
+            reason: "local source (symlinked)".to_string(),
+        };
+    }
+
+    // Parse the repository string back into a source identifier
+    let mut source = match SourceIdentifier::parse(&source_info.repository) {
+        Ok(s) => s,
+        Err(e) => {
+            return UpdateStatus::Failed {
+                name: dir_name,
+                reason: format!("failed to parse source: {}", e),
+            };
+        }
+    };
+
+    // Restore the pinned ref if one was used at install time
+    if let SourceIdentifier::Git {
+        ref mut git_ref, ..
+    } = source
+    {
+        *git_ref = source_info.git_ref.clone();
+    }
+
+    // Clone to temp dir and compare commits
+    if check_git_available().is_err() {
+        return UpdateStatus::Failed {
+            name: dir_name,
+            reason: "git is not installed".to_string(),
+        };
+    }
+
+    let (temp_dir, new_commit) = match clone_repo(&source) {
+        Ok(r) => r,
+        Err(e) => {
+            return UpdateStatus::Failed {
+                name: dir_name,
+                reason: format!("clone failed: {}", e),
+            };
+        }
+    };
+
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    if new_commit == source_info.commit {
+        return UpdateStatus::UpToDate { name: dir_name };
+    }
+
+    // Read the module name from manifest
+    let name = module_dir
+        .join("module.toml")
+        .exists()
+        .then(|| {
+            fs::read_to_string(module_dir.join("module.toml"))
+                .ok()
+                .and_then(|c| Module::parse(&c).ok())
+                .map(|m| m.name)
+        })
+        .flatten()
+        .unwrap_or(dir_name);
+
+    let old_version = module_dir
+        .join("module.toml")
+        .exists()
+        .then(|| {
+            fs::read_to_string(module_dir.join("module.toml"))
+                .ok()
+                .and_then(|c| Module::parse(&c).ok())
+                .map(|m| m.version)
+        })
+        .flatten()
+        .unwrap_or_default();
+
+    UpdateStatus::Updated {
+        name,
+        old_version,
+        new_version: String::new(), // not known until actual update
+        old_commit: source_info.commit,
+        new_commit,
+    }
+}
+
+/// Update a single installed module from its source. Returns the update status.
+pub fn update_module(module_dir: &Path, modules_dir: &Path) -> UpdateStatus {
+    let dir_name = module_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // Read current source info
+    let source_info = match read_source_info(module_dir) {
+        Some(info) => info,
+        None => {
+            return UpdateStatus::Skipped {
+                name: dir_name,
+                reason: "no source.toml (manually installed?)".to_string(),
+            };
+        }
+    };
+
+    // Skip local modules
+    if source_info.repository.starts_with("local:") {
+        return UpdateStatus::Skipped {
+            name: dir_name,
+            reason: "local source (symlinked)".to_string(),
+        };
+    }
+
+    // Parse the repository string back into a source identifier
+    let mut source = match SourceIdentifier::parse(&source_info.repository) {
+        Ok(s) => s,
+        Err(e) => {
+            return UpdateStatus::Failed {
+                name: dir_name,
+                reason: format!("failed to parse source: {}", e),
+            };
+        }
+    };
+
+    // Restore the pinned ref if one was used at install time
+    if let SourceIdentifier::Git {
+        ref mut git_ref, ..
+    } = source
+    {
+        *git_ref = source_info.git_ref.clone();
+    }
+
+    // Clone to temp dir
+    if check_git_available().is_err() {
+        return UpdateStatus::Failed {
+            name: dir_name,
+            reason: "git is not installed".to_string(),
+        };
+    }
+
+    let (temp_dir, new_commit) = match clone_repo(&source) {
+        Ok(r) => r,
+        Err(e) => {
+            return UpdateStatus::Failed {
+                name: dir_name,
+                reason: format!("clone failed: {}", e),
+            };
+        }
+    };
+
+    // Check if there's actually a new commit
+    if new_commit == source_info.commit {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return UpdateStatus::UpToDate { name: dir_name };
+    }
+
+    // Read old version from current manifest
+    let old_version = fs::read_to_string(module_dir.join("module.toml"))
+        .ok()
+        .and_then(|c| Module::parse(&c).ok())
+        .map(|m| m.version)
+        .unwrap_or_default();
+
+    // Determine the source directory within the cloned repo
+    let source_dir = if let Some(ref path) = source_info.path {
+        temp_dir.join(path)
+    } else {
+        // Detect layout to find our module
+        match detect_layout(&temp_dir) {
+            Ok(RepoLayout::SingleModule { .. }) => temp_dir.clone(),
+            Ok(RepoLayout::MultiModule { .. }) => {
+                // For multi-module, use the dir_name as the subdirectory
+                temp_dir.join(&dir_name)
+            }
+            Err(e) => {
+                let _ = fs::remove_dir_all(&temp_dir);
+                return UpdateStatus::Failed {
+                    name: dir_name,
+                    reason: format!("failed to detect layout: {}", e),
+                };
+            }
+        }
+    };
+
+    // Parse the new manifest
+    let new_module = match parse_manifest(&source_dir.join("module.toml")) {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&temp_dir);
+            return UpdateStatus::Failed {
+                name: dir_name,
+                reason: format!("failed to parse updated manifest: {}", e),
+            };
+        }
+    };
+
+    let new_version = new_module.version.clone();
+    let name = new_module.name.clone();
+
+    // Build source info for the update
+    let new_source_info = SourceInfo {
+        repository: source_info.repository,
+        git_ref: source_info.git_ref,
+        commit: new_commit.clone(),
+        path: source_info.path.clone(),
+        installed_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    };
+
+    let dest = modules_dir.join(&dir_name);
+
+    // Reinstall
+    match install_module_dir(&source_dir, &dest, &new_source_info, &new_module) {
+        Ok(_) => {
+            let _ = fs::remove_dir_all(&temp_dir);
+            UpdateStatus::Updated {
+                name,
+                old_version,
+                new_version,
+                old_commit: source_info.commit,
+                new_commit,
+            }
+        }
+        Err(e) => {
+            let _ = fs::remove_dir_all(&temp_dir);
+            UpdateStatus::Failed {
+                name: dir_name,
+                reason: format!("failed to install update: {}", e),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
