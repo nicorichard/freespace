@@ -55,16 +55,6 @@ cargo build --release
 # Binary at target/release/freespace
 ```
 
-## Built-in Modules
-
-These ship with freespace and work out of the box:
-
-- **Xcode Derived Data** — Xcode build artifacts (macOS)
-- **Node Package Caches** — npm, Yarn, and pnpm caches
-- **Homebrew Cache** — `~/Library/Caches/Homebrew` (macOS)
-- **Docker** — Docker Desktop disk images and build cache
-- **General Caches** — `~/Library/Caches`, `~/.cache`
-
 ## Configuration
 
 Freespace can be configured via `~/.config/freespace/config.toml`. See the [configuration docs](docs/configuration.md) for all available options.
@@ -84,7 +74,7 @@ freespace module install github:owner/repo
 3. Push to GitHub
 4. Anyone can install it with `freespace module install github:you/your-module`
 
-See the built-in modules for examples of the manifest format.
+See the example module above for the manifest format.
 
 ## License
 
