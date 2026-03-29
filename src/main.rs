@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{self, BufRead, Write};
 
 use clap::{Parser, Subcommand};
 
@@ -6,6 +7,8 @@ use freespace::app;
 use freespace::config;
 use freespace::module;
 use freespace::tui;
+
+const COMMUNITY_MODULES_SOURCE: &str = "github:nicorichard/freespace-modules";
 
 /// Interactive terminal interface for browsing and cleaning disk space consumers.
 #[derive(Parser)]
@@ -100,6 +103,11 @@ async fn main() -> anyhow::Result<()> {
             let mut search_dirs = cli.search_dirs;
             if let Some(path) = cli.path {
                 search_dirs.push(path);
+            }
+
+            // First-run: offer to install community modules if none are installed
+            if !directory_mode {
+                prompt_first_run_install(&cli.module_dirs);
             }
 
             // Install panic hook to restore terminal on panic
@@ -486,6 +494,71 @@ fn format_commit_range(old: &str, new: &str) -> String {
     let short_old = if old.len() > 7 { &old[..7] } else { old };
     let short_new = if new.len() > 7 { &new[..7] } else { new };
     format!("{}..{}", short_old, short_new)
+}
+
+/// On first run (no modules installed), prompt the user to install community modules.
+fn prompt_first_run_install(extra_module_dirs: &[String]) {
+    let default_dir = match config::default_modules_dir() {
+        Some(d) => d,
+        None => return,
+    };
+
+    let cfg = config::AppConfig::load().unwrap_or_default();
+    let extra: Vec<String> = cfg
+        .module_dirs
+        .iter()
+        .chain(extra_module_dirs.iter())
+        .cloned()
+        .collect();
+
+    let (modules, _) = module::manager::load_all_modules(Some(default_dir.clone()), &extra);
+    if !modules.is_empty() {
+        return;
+    }
+
+    // No modules found — ask the user
+    print!("No modules found. Install the community modules? [Y/n] ");
+    let _ = io::stdout().flush();
+
+    let mut input = String::new();
+    if io::stdin().lock().read_line(&mut input).is_err() {
+        return;
+    }
+
+    let answer = input.trim().to_lowercase();
+    if !answer.is_empty() && answer != "y" && answer != "yes" {
+        println!("Skipped. Install modules with: freespace module install <source>");
+        println!();
+        return;
+    }
+
+    // Install community modules
+    let _ = fs::create_dir_all(&default_dir);
+    println!("Installing community modules...");
+    match module::installer::install(COMMUNITY_MODULES_SOURCE, &default_dir) {
+        Ok(results) => {
+            for r in &results {
+                let action = if r.was_upgrade {
+                    "Updated"
+                } else {
+                    "Installed"
+                };
+                println!("  {} {} v{}", action, r.name, r.version);
+            }
+            println!(
+                "\n{} module(s) installed. Launching freespace...\n",
+                results.len()
+            );
+        }
+        Err(e) => {
+            eprintln!("Failed to install community modules: {}", e);
+            eprintln!(
+                "You can try manually: freespace module install {}",
+                COMMUNITY_MODULES_SOURCE
+            );
+            eprintln!();
+        }
+    }
 }
 
 /// Find a module directory by module id (checks both directory name and manifest id).
