@@ -80,6 +80,13 @@ enum ModuleCommand {
         /// ID of the module to inspect
         id: String,
     },
+    /// Update installed modules from their sources
+    Update {
+        /// ID of a specific module to update (updates all if omitted)
+        id: Option<String>,
+    },
+    /// Check for available updates without applying them
+    Outdated,
 }
 
 #[tokio::main]
@@ -210,6 +217,12 @@ async fn main() -> anyhow::Result<()> {
                 ModuleCommand::Inspect { id } => {
                     cmd_inspect(&modules_dir, &id)?;
                 }
+                ModuleCommand::Update { id } => {
+                    cmd_update(&modules_dir, id.as_deref())?;
+                }
+                ModuleCommand::Outdated => {
+                    cmd_outdated(&modules_dir);
+                }
             }
         }
     }
@@ -315,6 +328,164 @@ fn cmd_inspect(modules_dir: &std::path::Path, id: &str) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Update installed modules from their sources.
+fn cmd_update(modules_dir: &std::path::Path, id: Option<&str>) -> anyhow::Result<()> {
+    let dirs = collect_module_dirs(modules_dir, id)?;
+
+    let mut updated = 0u32;
+    let mut up_to_date = 0u32;
+    let mut skipped = 0u32;
+    let mut failed = 0u32;
+
+    for dir in &dirs {
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        print!("Checking {}... ", name);
+
+        let status = module::installer::update_module(dir, modules_dir);
+        match status {
+            module::installer::UpdateStatus::Updated {
+                name,
+                old_version,
+                new_version,
+                old_commit,
+                new_commit,
+                ..
+            } => {
+                let version_change = if !old_version.is_empty() && !new_version.is_empty() {
+                    format!("v{} -> v{}, ", old_version, new_version)
+                } else {
+                    String::new()
+                };
+                println!(
+                    "updated {} ({}{})",
+                    name,
+                    version_change,
+                    format_commit_range(&old_commit, &new_commit)
+                );
+                updated += 1;
+            }
+            module::installer::UpdateStatus::UpToDate { .. } => {
+                println!("up to date");
+                up_to_date += 1;
+            }
+            module::installer::UpdateStatus::Skipped { reason, .. } => {
+                println!("skipped ({})", reason);
+                skipped += 1;
+            }
+            module::installer::UpdateStatus::Failed { reason, .. } => {
+                println!("error: {}", reason);
+                failed += 1;
+            }
+        }
+    }
+
+    println!();
+    let mut parts = Vec::new();
+    if updated > 0 {
+        parts.push(format!("{} updated", updated));
+    }
+    if up_to_date > 0 {
+        parts.push(format!("{} up to date", up_to_date));
+    }
+    if skipped > 0 {
+        parts.push(format!("{} skipped", skipped));
+    }
+    if failed > 0 {
+        parts.push(format!("{} failed", failed));
+    }
+    println!("{} module(s): {}", dirs.len(), parts.join(", "));
+
+    if failed > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Check for available updates without applying them.
+fn cmd_outdated(modules_dir: &std::path::Path) {
+    let dirs = match collect_module_dirs(modules_dir, None) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let mut has_updates = false;
+
+    for dir in &dirs {
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        print!("Checking {}... ", name);
+
+        let status = module::installer::check_update(dir);
+        match status {
+            module::installer::UpdateStatus::Updated {
+                name,
+                old_commit,
+                new_commit,
+                ..
+            } => {
+                println!(
+                    "update available for {} ({})",
+                    name,
+                    format_commit_range(&old_commit, &new_commit)
+                );
+                has_updates = true;
+            }
+            module::installer::UpdateStatus::UpToDate { .. } => {
+                println!("up to date");
+            }
+            module::installer::UpdateStatus::Skipped { reason, .. } => {
+                println!("skipped ({})", reason);
+            }
+            module::installer::UpdateStatus::Failed { reason, .. } => {
+                println!("error: {}", reason);
+            }
+        }
+    }
+
+    if has_updates {
+        println!("\nRun `freespace module update` to apply updates.");
+    } else {
+        println!("\nAll modules are up to date.");
+    }
+}
+
+/// Collect module directories, optionally filtered by id.
+fn collect_module_dirs(
+    modules_dir: &std::path::Path,
+    id: Option<&str>,
+) -> anyhow::Result<Vec<std::path::PathBuf>> {
+    if let Some(id) = id {
+        let dir = find_module_dir(modules_dir, id)?;
+        return Ok(vec![dir]);
+    }
+
+    let entries = fs::read_dir(modules_dir)?;
+    let mut dirs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() && path.join("module.toml").exists() {
+            dirs.push(path);
+        }
+    }
+    dirs.sort();
+    Ok(dirs)
+}
+
+/// Format a commit range as "abc123..def456" using short SHAs.
+fn format_commit_range(old: &str, new: &str) -> String {
+    let short_old = if old.len() > 7 { &old[..7] } else { old };
+    let short_new = if new.len() > 7 { &new[..7] } else { new };
+    format!("{}..{}", short_old, short_new)
 }
 
 /// Find a module directory by module id (checks both directory name and manifest id).
