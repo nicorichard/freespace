@@ -244,9 +244,9 @@ pub fn display_order_item_indices(app: &App, module_idx: usize) -> (Vec<usize>, 
 }
 
 /// Handle click events for the module detail view.
-pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect, module_idx: usize) {
+pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect, module_idx: usize) -> bool {
     if module_idx >= app.modules.len() {
-        return;
+        return false;
     }
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -263,11 +263,11 @@ pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect, module_idx: u
     let content_top = table_area.y + 1;
     let content_height = table_area.height.saturating_sub(2) as usize;
     if row < content_top || content_height == 0 {
-        return;
+        return false;
     }
     let clicked_visual_offset = (row - content_top) as usize;
     if clicked_visual_offset >= content_height {
-        return;
+        return false;
     }
 
     let (display_order, group_boundaries) = display_order_item_indices(app, module_idx);
@@ -277,7 +277,7 @@ pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect, module_idx: u
     let clicked_pos = if !has_groups {
         let pos = scroll_offset + clicked_visual_offset;
         if pos >= display_order.len() {
-            return;
+            return false;
         }
         Some(pos)
     } else {
@@ -309,6 +309,9 @@ pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect, module_idx: u
         if on_checkbox {
             app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
         }
+        true
+    } else {
+        false
     }
 }
 
@@ -770,6 +773,7 @@ mod tests {
             total_size: Some(5_000_001_000),
             status: ModuleStatus::Ready,
             manifest_path: None,
+            update_status: None,
         };
         let mut app = App::new_for_test(vec![ms]);
         app.current_view = crate::app::View::ModuleDetail(0);
@@ -822,6 +826,7 @@ mod tests {
             total_size: Some(0),
             status: ModuleStatus::Ready,
             manifest_path: None,
+            update_status: None,
         };
         let mut app = App::new_for_test(vec![ms]);
         app.current_view = crate::app::View::ModuleDetail(0);

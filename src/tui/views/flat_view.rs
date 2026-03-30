@@ -188,7 +188,7 @@ pub fn sorted_flat_items(app: &App) -> Vec<(usize, usize)> {
 }
 
 /// Handle click events for the flat view.
-pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) {
+pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) -> bool {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -203,11 +203,11 @@ pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) {
     let content_top = table_area.y + 1;
     let content_height = table_area.height.saturating_sub(2) as usize;
     if row < content_top || content_height == 0 {
-        return;
+        return false;
     }
     let clicked_visual_offset = (row - content_top) as usize;
     if clicked_visual_offset >= content_height {
-        return;
+        return false;
     }
 
     let flat_items = sorted_flat_items(app);
@@ -219,6 +219,9 @@ pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) {
         if on_checkbox {
             app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
         }
+        true
+    } else {
+        false
     }
 }
 
@@ -489,6 +492,7 @@ mod tests {
             total_size: Some(total),
             status: ModuleStatus::Ready,
             manifest_path: None,
+            update_status: None,
         }
     }
 

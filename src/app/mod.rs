@@ -7,7 +7,8 @@ mod types;
 pub use drill::{DrillLevel, DrillState};
 pub use filter::{matches_filter, matches_structured_filter};
 pub use types::{
-    CleanupProgressState, FlashLevel, Item, ItemType, ModuleState, ModuleStatus, ScanStatus, View,
+    CleanupProgressState, FlashLevel, Item, ItemType, ModuleState, ModuleStatus,
+    ModuleUpdateStatus, ScanStatus, View,
 };
 
 use std::collections::{BTreeSet, HashSet};
@@ -114,11 +115,70 @@ pub struct App {
     /// Persistent scroll offset for table views.
     pub view_offset: usize,
     /// Last left-click position and time, for double-click detection.
-    last_click: Option<(Instant, u16, u16)>,
+    /// The bool indicates whether the click hit a valid row.
+    last_click: Option<(Instant, u16, u16, bool)>,
     /// Whether to display icons (from config).
     pub icons_enabled: bool,
     /// Cancel token for the in-progress scan tasks.
     scan_cancel: Arc<AtomicBool>,
+    /// Receiver for background module update check results.
+    update_check_rx: Option<mpsc::UnboundedReceiver<(usize, ModuleUpdateStatus)>>,
+}
+
+/// Spawn background update checks for all git-sourced modules.
+///
+/// Sends `(module_index, ModuleUpdateStatus)` results as each check completes.
+/// Uses lightweight `git ls-remote` — no cloning.
+fn spawn_update_checks(
+    modules: &[ModuleState],
+) -> Option<mpsc::UnboundedReceiver<(usize, ModuleUpdateStatus)>> {
+    use crate::module::installer;
+
+    // Collect (index, module_dir) for modules that have source info
+    let check_targets: Vec<(usize, PathBuf)> = modules
+        .iter()
+        .enumerate()
+        .filter_map(|(i, ms)| {
+            ms.manifest_path
+                .as_ref()
+                .and_then(|p| p.parent())
+                .map(|dir| (i, dir.to_path_buf()))
+        })
+        .collect();
+
+    if check_targets.is_empty() {
+        return None;
+    }
+
+    let (tx, rx) = mpsc::unbounded_channel();
+
+    tokio::task::spawn_blocking(move || {
+        for (idx, dir) in check_targets {
+            let status = match installer::check_update(&dir) {
+                installer::UpdateStatus::Updated { new_commit, .. } => {
+                    ModuleUpdateStatus::UpdateAvailable { new_commit }
+                }
+                installer::UpdateStatus::NewerTag {
+                    current_tag,
+                    latest_tag,
+                    ..
+                } => ModuleUpdateStatus::NewerTagAvailable {
+                    current_tag,
+                    latest_tag,
+                },
+                installer::UpdateStatus::UpToDate { .. } => ModuleUpdateStatus::UpToDate,
+                installer::UpdateStatus::Skipped { .. } => ModuleUpdateStatus::Skipped,
+                installer::UpdateStatus::Failed { reason, .. } => {
+                    ModuleUpdateStatus::Failed(reason)
+                }
+            };
+            if tx.send((idx, status)).is_err() {
+                break; // App closed
+            }
+        }
+    });
+
+    Some(rx)
 }
 
 impl App {
@@ -153,6 +213,9 @@ impl App {
         };
 
         let (disk_total, disk_free) = disk_stats().unzip();
+
+        // Spawn background update checks for git-sourced modules
+        let update_check_rx = spawn_update_checks(&modules);
 
         Self {
             modules,
@@ -199,6 +262,7 @@ impl App {
             last_click: None,
             icons_enabled: config.icons.enabled,
             scan_cancel,
+            update_check_rx,
         }
     }
 
@@ -312,6 +376,7 @@ impl App {
                     total_size: None,
                     status: ModuleStatus::Loading,
                     manifest_path: Some(manifest_path),
+                    update_status: None,
                 })
             })
             .collect();
@@ -357,6 +422,9 @@ impl App {
 
             // Process any pending cleanup messages (non-blocking)
             self.process_cleanup_messages();
+
+            // Process background update check results (non-blocking)
+            self.process_update_checks();
 
             // Increment tick counter for spinner animation
             self.tick_count = self.tick_count.wrapping_add(1);
@@ -634,15 +702,18 @@ impl App {
                 let now = Instant::now();
                 let is_double = self
                     .last_click
-                    .map(|(t, _c, r)| r == row && now.duration_since(t).as_millis() < 400)
+                    .map(|(t, _c, r, hit)| {
+                        hit && r == row && now.duration_since(t).as_millis() < 400
+                    })
                     .unwrap_or(false);
-                self.last_click = Some((now, col, row));
 
                 if is_double {
+                    self.last_click = Some((now, col, row, true));
                     // Double-click → Enter on the already-selected row
                     self.handle_key(KeyCode::Enter, KeyModifiers::NONE);
                 } else {
-                    self.handle_click(col, row);
+                    let hit = self.handle_click(col, row);
+                    self.last_click = Some((now, col, row, hit));
                 }
             }
             _ => {}
@@ -650,27 +721,28 @@ impl App {
     }
 
     /// Handle a left-click by mapping screen coordinates to a list item.
-    fn handle_click(&mut self, col: u16, row: u16) {
+    /// Returns true if the click hit a valid row.
+    fn handle_click(&mut self, col: u16, row: u16) -> bool {
         // Get terminal size to recompute layout
         let (width, height) = match crossterm::terminal::size() {
             Ok(s) => s,
-            Err(_) => return,
+            Err(_) => return false,
         };
         let area = ratatui::layout::Rect::new(0, 0, width, height);
         if area.width < Self::MIN_WIDTH {
-            return;
+            return false;
         }
 
         match &self.current_view {
             View::ModuleList => views::module_list::handle_click(self, col, row, area),
             View::ModuleDetail(idx) => {
                 let idx = *idx;
-                views::module_detail::handle_click(self, col, row, area, idx);
+                views::module_detail::handle_click(self, col, row, area, idx)
             }
             View::FlatView => views::flat_view::handle_click(self, col, row, area),
             View::FileBrowser => views::file_browser::handle_click(self, col, row, area),
             View::CleanupConfirm => views::cleanup_confirm::handle_click(self, col, row, area),
-            _ => {}
+            _ => false,
         }
     }
 
@@ -873,6 +945,113 @@ impl App {
         }
     }
 
+    /// Start updating a single module from the info panel.
+    pub fn start_module_update(&mut self, module_idx: usize) {
+        use crate::module::installer;
+        use crate::module::source::SourceFile;
+
+        let ms = &self.modules[module_idx];
+        let module_dir = match ms.manifest_path.as_ref().and_then(|p| p.parent()) {
+            Some(dir) => dir.to_path_buf(),
+            None => return,
+        };
+        let modules_dir = match module_dir.parent() {
+            Some(dir) => dir.to_path_buf(),
+            None => return,
+        };
+
+        // For tag upgrades, update source.toml to the new tag before running update_module
+        if let Some(ModuleUpdateStatus::NewerTagAvailable { latest_tag, .. }) = &ms.update_status {
+            if let Some(mut source_info) = installer::read_source_info(&module_dir) {
+                source_info.git_ref = Some(latest_tag.clone());
+                let source_file = SourceFile {
+                    source: source_info,
+                };
+                if let Ok(content) = toml::to_string_pretty(&source_file) {
+                    let _ = std::fs::write(module_dir.join("source.toml"), content);
+                }
+            }
+        }
+
+        // Mark as updating
+        self.modules[module_idx].update_status = Some(ModuleUpdateStatus::Checking);
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.update_check_rx = Some(rx);
+
+        tokio::task::spawn_blocking(move || {
+            let status = match installer::update_module(&module_dir, &modules_dir) {
+                installer::UpdateStatus::Updated { .. } => ModuleUpdateStatus::UpToDate,
+                installer::UpdateStatus::UpToDate { .. } => ModuleUpdateStatus::UpToDate,
+                installer::UpdateStatus::Failed { reason, .. } => {
+                    ModuleUpdateStatus::Failed(reason)
+                }
+                _ => ModuleUpdateStatus::Skipped,
+            };
+            let _ = tx.send((module_idx, status));
+        });
+
+        self.set_flash("Updating module...".to_string(), FlashLevel::Info);
+    }
+
+    /// Process background update check results and store them in module state.
+    fn process_update_checks(&mut self) {
+        let rx = match self.update_check_rx.as_mut() {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        let mut all_done = false;
+        let mut updated_indices = Vec::new();
+        while let Ok((idx, status)) = rx.try_recv() {
+            if idx < self.modules.len() {
+                // Detect if this was an actual update (was Checking, now UpToDate)
+                let was_updating = matches!(
+                    self.modules[idx].update_status,
+                    Some(ModuleUpdateStatus::Checking)
+                );
+                let just_updated = was_updating && matches!(status, ModuleUpdateStatus::UpToDate);
+
+                self.modules[idx].update_status = Some(status);
+
+                if just_updated {
+                    updated_indices.push(idx);
+                }
+            }
+        }
+
+        // Reload manifests for modules that were just updated
+        for idx in updated_indices {
+            if let Some(ref manifest_path) = self.modules[idx].manifest_path {
+                if let Ok(content) = std::fs::read_to_string(manifest_path) {
+                    if let Ok(module) = crate::module::manifest::Module::parse(&content) {
+                        self.modules[idx].module = module;
+                        self.set_flash("Module updated successfully".to_string(), FlashLevel::Info);
+                    }
+                }
+            }
+        }
+
+        // Check if the channel is closed (sender dropped = all checks done)
+        if self
+            .update_check_rx
+            .as_ref()
+            .is_some_and(|rx| rx.is_closed())
+        {
+            // Mark any unchecked modules as skipped
+            for ms in &mut self.modules {
+                if ms.update_status.is_none() {
+                    ms.update_status = Some(ModuleUpdateStatus::Skipped);
+                }
+            }
+            all_done = true;
+        }
+
+        if all_done {
+            self.update_check_rx = None;
+        }
+    }
+
     /// Apply a cleanup result to module state and set flash messages.
     fn apply_cleanup_result(&mut self, result: cleaner::CleanupResult) {
         let succeeded: HashSet<PathBuf> = result.succeeded.into_iter().collect();
@@ -1056,6 +1235,7 @@ impl App {
             last_click: None,
             icons_enabled: true,
             scan_cancel: Arc::new(AtomicBool::new(false)),
+            update_check_rx: None,
         }
     }
 }
@@ -1127,6 +1307,7 @@ mod tests {
             total_size: Some(0), // recalculated by sort
             status: ModuleStatus::Ready,
             manifest_path: None,
+            update_status: None,
         }
     }
 

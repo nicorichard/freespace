@@ -33,6 +33,27 @@ pub struct ModuleState {
     pub status: ModuleStatus,
     /// Filesystem path to the module's manifest (module.toml).
     pub manifest_path: Option<PathBuf>,
+    /// Result of the background update check (None = not checked yet).
+    pub update_status: Option<ModuleUpdateStatus>,
+}
+
+/// Result of checking a module for available updates.
+pub enum ModuleUpdateStatus {
+    /// Checking in progress.
+    Checking,
+    /// Module is up to date.
+    UpToDate,
+    /// A newer commit is available on the remote.
+    UpdateAvailable { new_commit: String },
+    /// A newer semver tag exists on the remote.
+    NewerTagAvailable {
+        current_tag: String,
+        latest_tag: String,
+    },
+    /// Not applicable (local module, no source.toml, etc.)
+    Skipped,
+    /// Check failed.
+    Failed(String),
 }
 
 /// Loading/discovery status of a module.
