@@ -1,4 +1,5 @@
-// Help overlay — centered modal listing all keybindings by context.
+// Help overlay — contextual modal listing keybindings for the current view.
+// Generated from the shared keybinding tables in `tui::keybindings`.
 
 use crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -7,7 +8,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, View};
+use crate::tui::keybindings::{self, HotkeyDef};
 use crate::tui::widgets::centered_rect;
 
 /// Handle key events for the help overlay.
@@ -26,10 +28,8 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     let area = frame.area();
     let dialog_area = centered_rect(area, 70);
 
-    // Clear the area behind the dialog
     frame.render_widget(Clear, dialog_area);
 
-    // Layout: header, keybinding sections, footer
     let inner_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -44,9 +44,24 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     render_footer(app, frame, inner_chunks[2]);
 }
 
+/// Return the title and hotkey table for the view that opened help.
+fn context_for_view(view: View) -> (&'static str, &'static [HotkeyDef]) {
+    match view {
+        View::ModuleList => ("Module List", keybindings::MODULE_LIST),
+        View::ModuleDetail(_) => ("Module Detail", keybindings::MODULE_DETAIL),
+        View::FlatView => ("All Items", keybindings::FLAT_VIEW),
+        View::FileBrowser => ("File Browser", keybindings::FILE_BROWSER),
+        View::CleanupConfirm => ("Cleanup Confirm", keybindings::CLEANUP_CONFIRM),
+        View::CleanupProgress => ("Cleanup", keybindings::CLEANUP_PROGRESS_ACTIVE),
+        // Fallback for overlays that shouldn't normally open help
+        _ => ("Module List", keybindings::MODULE_LIST),
+    }
+}
+
 fn render_header(app: &mut App, frame: &mut Frame, area: Rect) {
+    let (title, _) = context_for_view(app.previous_view);
     let header = Paragraph::new(Line::from(vec![Span::styled(
-        " Keyboard Shortcuts",
+        format!(" {} — Keyboard Shortcuts", title),
         app.theme.style_header(),
     )]))
     .block(
@@ -55,6 +70,20 @@ fn render_header(app: &mut App, frame: &mut Frame, area: Rect) {
             .border_style(app.theme.style_border()),
     );
     frame.render_widget(header, area);
+}
+
+fn push_hotkeys(
+    rows: &mut Vec<Row<'static>>,
+    defs: &[HotkeyDef],
+    key_style: Style,
+    desc_style: Style,
+) {
+    for hk in defs {
+        rows.push(Row::new(vec![
+            Span::styled(hk.key, key_style),
+            Span::styled(hk.desc, desc_style),
+        ]));
+    }
 }
 
 fn render_keybindings(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -66,76 +95,26 @@ fn render_keybindings(app: &mut App, frame: &mut Frame, area: Rect) {
         .add_modifier(Modifier::BOLD);
     let desc_style = app.theme.style_normal();
 
-    let rows: Vec<Row> = vec![
-        // Global section
-        Row::new(vec![Span::styled("Global", section_style), Span::raw("")]),
-        keybinding_row("q", "Quit application", key_style, desc_style),
-        keybinding_row("?", "Toggle help overlay", key_style, desc_style),
-        Row::new(vec![Span::raw(""), Span::raw("")]),
-        // Navigation section
-        Row::new(vec![
-            Span::styled("Navigation (all list views)", section_style),
+    let mut rows: Vec<Row<'static>> = Vec::new();
+
+    let section = |title: &'static str, rows: &mut Vec<Row<'static>>| {
+        rows.push(Row::new(vec![
+            Span::styled(title, section_style),
             Span::raw(""),
-        ]),
-        keybinding_row("j / \u{2193}", "Move down", key_style, desc_style),
-        keybinding_row("k / \u{2191}", "Move up", key_style, desc_style),
-        keybinding_row("PgDn", "Jump down 20 items", key_style, desc_style),
-        keybinding_row("PgUp", "Jump up 20 items", key_style, desc_style),
-        keybinding_row("Home / g", "Jump to first item", key_style, desc_style),
-        keybinding_row("End / G", "Jump to last item", key_style, desc_style),
-        Row::new(vec![Span::raw(""), Span::raw("")]),
-        // Module List section
-        Row::new(vec![
-            Span::styled("Module List", section_style),
-            Span::raw(""),
-        ]),
-        keybinding_row("Enter", "Open module details", key_style, desc_style),
-        keybinding_row("Space", "Toggle module selection", key_style, desc_style),
-        keybinding_row("a", "Select all modules", key_style, desc_style),
-        keybinding_row("n", "Deselect all modules", key_style, desc_style),
-        keybinding_row("i", "Module info", key_style, desc_style),
-        keybinding_row("/", "Search list", key_style, desc_style),
-        keybinding_row("f", "Filter by risk / restore", key_style, desc_style),
-        keybinding_row("c", "Clean selected items", key_style, desc_style),
-        keybinding_row(
-            "Tab",
-            "Switch between module list and all-items view",
-            key_style,
-            desc_style,
-        ),
-        Row::new(vec![Span::raw(""), Span::raw("")]),
-        // Module Detail section
-        Row::new(vec![
-            Span::styled("Module Detail", section_style),
-            Span::raw(""),
-        ]),
-        keybinding_row("Space", "Toggle item selection", key_style, desc_style),
-        keybinding_row("a", "Select all items", key_style, desc_style),
-        keybinding_row("n", "Deselect all items", key_style, desc_style),
-        keybinding_row("Enter", "Drill into directory", key_style, desc_style),
-        keybinding_row("o", "Open in file manager", key_style, desc_style),
-        keybinding_row("i", "Module info", key_style, desc_style),
-        keybinding_row("/", "Search list", key_style, desc_style),
-        keybinding_row("f", "Filter by risk / restore", key_style, desc_style),
-        keybinding_row("c", "Clean selected items", key_style, desc_style),
-        keybinding_row(
-            "Backspace / Esc",
-            "Back (up one level / module list)",
-            key_style,
-            desc_style,
-        ),
-        Row::new(vec![Span::raw(""), Span::raw("")]),
-        // Cleanup section
-        Row::new(vec![
-            Span::styled("Cleanup Confirm", section_style),
-            Span::raw(""),
-        ]),
-        keybinding_row("Space", "Toggle item check", key_style, desc_style),
-        keybinding_row("a", "Toggle all checks", key_style, desc_style),
-        keybinding_row("t", "Move to trash", key_style, desc_style),
-        keybinding_row("d", "Permanently delete", key_style, desc_style),
-        keybinding_row("n / Esc", "Cancel and go back", key_style, desc_style),
-    ];
+        ]));
+    };
+
+    // Navigation (shown for all list views, not cleanup progress)
+    if !matches!(app.previous_view, View::CleanupProgress) {
+        section("Navigation", &mut rows);
+        push_hotkeys(&mut rows, keybindings::NAVIGATION, key_style, desc_style);
+        rows.push(Row::new(vec![Span::raw(""), Span::raw("")]));
+    }
+
+    // Context-specific hotkeys
+    let (title, defs) = context_for_view(app.previous_view);
+    section(title, &mut rows);
+    push_hotkeys(&mut rows, defs, key_style, desc_style);
 
     let widths = [
         Constraint::Length(20), // Key column
@@ -151,19 +130,6 @@ fn render_keybindings(app: &mut App, frame: &mut Frame, area: Rect) {
         .style(app.theme.style_normal());
 
     frame.render_widget(table, area);
-}
-
-/// Build a single keybinding row with styled key and description.
-fn keybinding_row<'a>(
-    key: &'a str,
-    description: &'a str,
-    key_style: Style,
-    desc_style: Style,
-) -> Row<'a> {
-    Row::new(vec![
-        Span::styled(key, key_style),
-        Span::styled(description, desc_style),
-    ])
 }
 
 fn render_footer(app: &mut App, frame: &mut Frame, area: Rect) {

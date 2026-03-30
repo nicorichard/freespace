@@ -522,6 +522,11 @@ pub enum UpdateStatus {
     Failed { name: String, reason: String },
 }
 
+/// Read the module name from an installed module directory (public alias).
+pub fn read_module_name_pub(module_dir: &Path, fallback: &str) -> String {
+    read_module_name(module_dir, fallback)
+}
+
 /// Read the module name from an installed module directory.
 fn read_module_name(module_dir: &Path, fallback: &str) -> String {
     fs::read_to_string(module_dir.join("module.toml"))
@@ -580,7 +585,7 @@ fn prepare_update_source(
 /// Query the remote for the HEAD (or a specific ref) commit SHA without cloning.
 ///
 /// Uses `git ls-remote` which is a single lightweight network roundtrip.
-fn ls_remote_ref(source: &SourceIdentifier, git_ref: Option<&str>) -> Result<String, String> {
+pub fn ls_remote_ref(source: &SourceIdentifier, git_ref: Option<&str>) -> Result<String, String> {
     let urls = source.clone_urls();
     if urls.is_empty() {
         return Err("not a git source".to_string());
@@ -613,7 +618,7 @@ fn ls_remote_ref(source: &SourceIdentifier, git_ref: Option<&str>) -> Result<Str
 /// Query the remote for all tags via `git ls-remote --tags`.
 ///
 /// Returns a list of (tag_name, sha) pairs. Filters out `^{}` dereferenced entries.
-fn ls_remote_tags(source: &SourceIdentifier) -> Result<Vec<String>, String> {
+pub fn ls_remote_tags(source: &SourceIdentifier) -> Result<Vec<String>, String> {
     let urls = source.clone_urls();
     if urls.is_empty() {
         return Err("not a git source".to_string());
@@ -649,9 +654,82 @@ fn ls_remote_tags(source: &SourceIdentifier) -> Result<Vec<String>, String> {
 }
 
 /// Parse a tag name as semver, stripping an optional `v` prefix.
-fn parse_semver_tag(tag: &str) -> Option<semver::Version> {
+pub fn parse_semver_tag(tag: &str) -> Option<semver::Version> {
     let stripped = tag.strip_prefix('v').unwrap_or(tag);
     semver::Version::parse(stripped).ok()
+}
+
+/// Pre-read source info for a module directory, returning what's needed
+/// for batch update checking. Returns None if the module should be skipped.
+pub fn read_update_check_info(module_dir: &Path) -> Option<(SourceIdentifier, SourceInfo, String)> {
+    prepare_update_source(module_dir).ok()
+}
+
+/// Evaluate a module's update status given pre-fetched remote data.
+///
+/// - `remote_head`: HEAD SHA from `ls_remote_ref` (None if not fetched or failed)
+/// - `remote_tags`: tag list from `ls_remote_tags` (None if not fetched or failed)
+pub fn evaluate_update_status(
+    source_info: &SourceInfo,
+    name: &str,
+    remote_head: Option<&str>,
+    remote_tags: Option<&[String]>,
+) -> UpdateStatus {
+    // If pinned to a semver tag, check for newer tags
+    if let Some(ref pinned_ref) = source_info.git_ref {
+        if let Some(current_ver) = parse_semver_tag(pinned_ref) {
+            return match remote_tags {
+                Some(tags) => {
+                    let latest = tags
+                        .iter()
+                        .filter_map(|t| {
+                            parse_semver_tag(t)
+                                .filter(|v| v.pre.is_empty())
+                                .map(|v| (t, v))
+                        })
+                        .max_by(|a, b| a.1.cmp(&b.1));
+
+                    match latest {
+                        Some((tag, ver)) if ver > current_ver => UpdateStatus::NewerTag {
+                            name: name.to_string(),
+                            current_tag: pinned_ref.clone(),
+                            latest_tag: tag.clone(),
+                        },
+                        _ => UpdateStatus::UpToDate {
+                            name: name.to_string(),
+                        },
+                    }
+                }
+                None => UpdateStatus::Failed {
+                    name: name.to_string(),
+                    reason: "failed to fetch remote tags".to_string(),
+                },
+            };
+        }
+    }
+
+    // Unpinned or non-semver ref: compare commit SHAs
+    match remote_head {
+        Some(remote_sha) => {
+            if remote_sha == source_info.commit {
+                UpdateStatus::UpToDate {
+                    name: name.to_string(),
+                }
+            } else {
+                UpdateStatus::Updated {
+                    name: name.to_string(),
+                    old_version: String::new(),
+                    new_version: String::new(),
+                    old_commit: source_info.commit.clone(),
+                    new_commit: remote_sha.to_string(),
+                }
+            }
+        }
+        None => UpdateStatus::Failed {
+            name: name.to_string(),
+            reason: "failed to query remote".to_string(),
+        },
+    }
 }
 
 /// Check a single installed module for available updates without applying them.

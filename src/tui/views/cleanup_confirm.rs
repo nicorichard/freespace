@@ -527,22 +527,14 @@ fn render_action_bar(app: &mut App, frame: &mut Frame, area: Rect, shown: usize,
     render_view_status_bar(
         frame,
         area,
-        &app.theme,
+        app,
         app.flash_message.as_ref().map(|(m, l)| (m.as_str(), l)),
         app.filter_active,
         &app.filter_query,
         false, // structured filter not applicable in cleanup confirm
         shown,
         total,
-        &[
-            ("␣", "toggle"),
-            ("a", "all"),
-            ("t", "trash"),
-            ("d", "delete"),
-            ("n", "cancel"),
-            ("/", "search"),
-        ],
-        false,
+        crate::tui::keybindings::CLEANUP_CONFIRM,
         app.version_hover,
     );
 }

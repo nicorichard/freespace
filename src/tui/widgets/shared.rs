@@ -8,6 +8,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
+use crate::app::App;
+use crate::tui::keybindings::{HotkeyAppearance, HotkeyDef};
 use crate::tui::theme::Theme;
 
 /// Spinner characters (Braille dots) that cycle during scanning/loading.
@@ -37,50 +39,58 @@ pub fn cmp_size_desc(a: Option<u64>, b: Option<u64>) -> Ordering {
 /// - Key text inside brackets in the theme's accent (size_fg) color
 /// - Action text in the theme's muted/border color
 /// - Separator `│` in dim border color
-pub fn keybinding_bar<'a>(
-    bindings: &[(&'a str, &'a str)],
-    theme: &Theme,
-    can_clean: bool,
-) -> Line<'a> {
+pub fn keybinding_bar(bindings: &[HotkeyDef], theme: &Theme, app: Option<&App>) -> Line<'static> {
     let bracket_style = theme.style_border();
     let key_style = theme.style_size();
     let action_style = theme.style_border();
     let sep_style = theme.style_border();
 
-    let mut spans: Vec<Span<'a>> = Vec::new();
+    let mut spans: Vec<Span<'static>> = Vec::new();
     spans.push(Span::raw(" "));
 
-    for (i, (key, action)) in bindings.iter().enumerate() {
-        if i > 0 {
+    let mut first = true;
+    for hk in bindings.iter().filter(|hk| hk.bar) {
+        if !first {
             spans.push(Span::styled(" \u{2502} ", sep_style));
         }
+        first = false;
 
-        let is_clean = *action == "clean";
+        let key = hk.key;
+        let action = hk.label;
 
-        if is_clean && can_clean {
-            // Bright pill-style highlight to make clean really pop
-            let ready = theme.style_clean_ready();
-            spans.push(Span::styled(" [", ready));
-            spans.push(Span::styled(*key, ready));
-            spans.push(Span::styled("]", ready));
-            spans.push(Span::styled("lean ", ready));
-        } else if is_clean {
-            // Muted when nothing is selected
-            let dim = theme.style_disabled();
-            spans.push(Span::styled("[", dim));
-            spans.push(Span::styled(*key, dim));
-            spans.push(Span::styled("]", dim));
-            spans.push(Span::styled("lean", dim));
-        } else {
-            spans.push(Span::styled("[", bracket_style));
-            spans.push(Span::styled(*key, key_style));
-            // Condense: if key matches first char of action, show [k]ey_rest
-            if key.len() == 1 && action.starts_with(*key) {
-                spans.push(Span::styled("]", bracket_style));
-                spans.push(Span::styled(&action[key.len()..], action_style));
-            } else {
-                spans.push(Span::styled("] ", bracket_style));
-                spans.push(Span::styled(*action, action_style));
+        // Resolve appearance via callback (or default to Normal)
+        let appearance = match (hk.style, app) {
+            (Some(f), Some(a)) => f(a),
+            _ => HotkeyAppearance::Normal,
+        };
+
+        match appearance {
+            HotkeyAppearance::Highlighted => {
+                let ready = theme.style_clean_ready();
+                spans.push(Span::styled(" [", ready));
+                spans.push(Span::styled(key, ready));
+                spans.push(Span::styled("]", ready));
+                spans.push(Span::styled(&action[1..], ready));
+                spans.push(Span::styled(" ", ready));
+            }
+            HotkeyAppearance::Dimmed => {
+                let dim = theme.style_disabled();
+                spans.push(Span::styled("[", dim));
+                spans.push(Span::styled(key, dim));
+                spans.push(Span::styled("]", dim));
+                spans.push(Span::styled(&action[1..], dim));
+            }
+            HotkeyAppearance::Normal => {
+                spans.push(Span::styled("[", bracket_style));
+                spans.push(Span::styled(key, key_style));
+                // Condense: if key matches first char of action, show [k]ey_rest
+                if key.len() == 1 && action.starts_with(key) {
+                    spans.push(Span::styled("]", bracket_style));
+                    spans.push(Span::styled(&action[key.len()..], action_style));
+                } else {
+                    spans.push(Span::styled("] ", bracket_style));
+                    spans.push(Span::styled(action, action_style));
+                }
             }
         }
     }
@@ -177,17 +187,17 @@ pub fn flash_line<'a>(message: &'a str, level: &crate::app::FlashLevel, theme: &
 pub fn render_view_status_bar(
     frame: &mut Frame,
     area: Rect,
-    theme: &Theme,
+    app: &App,
     flash: Option<(&str, &crate::app::FlashLevel)>,
     filter_active: bool,
     filter_query: &str,
     has_structured_filter: bool,
     shown: usize,
     total: usize,
-    bindings: &[(&str, &str)],
-    can_clean: bool,
+    bindings: &[HotkeyDef],
     version_hover: bool,
 ) {
+    let theme = &app.theme;
     let filter_indicator: Vec<Span> = if has_structured_filter {
         vec![
             Span::styled(" [", theme.style_border()),
@@ -217,7 +227,7 @@ pub fn render_view_status_bar(
         spans.extend(filter_indicator);
         Line::from(spans)
     } else {
-        let mut bar = keybinding_bar(bindings, theme, can_clean);
+        let mut bar = keybinding_bar(bindings, theme, Some(app));
         bar.spans.extend(filter_indicator);
         bar
     };

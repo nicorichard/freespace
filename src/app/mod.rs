@@ -8,7 +8,7 @@ pub use drill::{DrillLevel, DrillState};
 pub use filter::{matches_filter, matches_structured_filter};
 pub use types::{
     CleanupProgressState, FlashLevel, Item, ItemType, ModuleState, ModuleStatus,
-    ModuleUpdateStatus, ScanStatus, View,
+    ModuleUpdateStatus, ScanStatus, SiblingUpdatePrompt, View,
 };
 
 use std::collections::{BTreeSet, HashSet};
@@ -70,6 +70,10 @@ pub struct App {
     pub tick_count: usize,
     /// Whether the info overlay is showing a remove confirmation prompt.
     pub info_confirm_remove: bool,
+    /// Sibling update confirmation state for the info overlay.
+    pub info_confirm_update: Option<SiblingUpdatePrompt>,
+    /// Whether the module list is showing a bulk update confirmation prompt.
+    pub confirm_update_all: bool,
     /// Deferred editor launch: set to a path to open in $EDITOR after key handling.
     pub pending_editor: Option<PathBuf>,
     /// Drill-in state for directory exploration.
@@ -129,53 +133,146 @@ pub struct App {
 
 /// Spawn background update checks for all git-sourced modules.
 ///
-/// Sends `(module_index, ModuleUpdateStatus)` results as each check completes.
-/// Uses lightweight `git ls-remote` — no cloning.
+/// Groups modules by repository so each unique remote is queried only once
+/// via `git ls-remote`, then distributes results to all modules from that repo.
 fn spawn_update_checks(
     modules: &[ModuleState],
 ) -> Option<mpsc::UnboundedReceiver<(usize, ModuleUpdateStatus)>> {
     use crate::module::installer;
+    use crate::module::source::{SourceIdentifier, SourceInfo};
+    use std::collections::HashMap;
 
-    // Collect (index, module_dir) for modules that have source info
-    let check_targets: Vec<(usize, PathBuf)> = modules
-        .iter()
-        .enumerate()
-        .filter_map(|(i, ms)| {
-            ms.manifest_path
-                .as_ref()
-                .and_then(|p| p.parent())
-                .map(|dir| (i, dir.to_path_buf()))
-        })
-        .collect();
+    /// Module info needed for the background check thread.
+    struct CheckTarget {
+        idx: usize,
+        name: String,
+        source_info: SourceInfo,
+        needs_tags: bool,
+    }
 
-    if check_targets.is_empty() {
+    // Pre-read source info for all modules (cheap, filesystem only)
+    let mut repo_groups: HashMap<String, (SourceIdentifier, Vec<CheckTarget>)> = HashMap::new();
+    let mut skip_results: Vec<(usize, ModuleUpdateStatus)> = Vec::new();
+
+    for (i, ms) in modules.iter().enumerate() {
+        let module_dir = match ms.manifest_path.as_ref().and_then(|p| p.parent()) {
+            Some(dir) => dir,
+            None => continue,
+        };
+
+        let (source, source_info, dir_name) = match installer::read_update_check_info(module_dir) {
+            Some(v) => v,
+            None => {
+                skip_results.push((i, ModuleUpdateStatus::Skipped));
+                continue;
+            }
+        };
+
+        let needs_tags = source_info
+            .git_ref
+            .as_ref()
+            .and_then(|r| installer::parse_semver_tag(r))
+            .is_some();
+
+        let name = installer::read_module_name_pub(module_dir, &dir_name);
+        let repo_key = source_info.repository.clone();
+
+        repo_groups
+            .entry(repo_key)
+            .or_insert_with(|| (source, Vec::new()))
+            .1
+            .push(CheckTarget {
+                idx: i,
+                name,
+                source_info,
+                needs_tags,
+            });
+    }
+
+    if repo_groups.is_empty() && skip_results.is_empty() {
         return None;
     }
 
     let (tx, rx) = mpsc::unbounded_channel();
 
+    // Send skip results immediately
+    for (idx, status) in skip_results {
+        let _ = tx.send((idx, status));
+    }
+
+    if repo_groups.is_empty() {
+        return Some(rx);
+    }
+
     tokio::task::spawn_blocking(move || {
-        for (idx, dir) in check_targets {
-            let status = match installer::check_update(&dir) {
-                installer::UpdateStatus::Updated { new_commit, .. } => {
-                    ModuleUpdateStatus::UpdateAvailable { new_commit }
-                }
-                installer::UpdateStatus::NewerTag {
-                    current_tag,
-                    latest_tag,
-                    ..
-                } => ModuleUpdateStatus::NewerTagAvailable {
-                    current_tag,
-                    latest_tag,
-                },
-                installer::UpdateStatus::UpToDate { .. } => ModuleUpdateStatus::UpToDate,
-                installer::UpdateStatus::Skipped { .. } => ModuleUpdateStatus::Skipped,
-                installer::UpdateStatus::Failed { reason, .. } => {
-                    ModuleUpdateStatus::Failed(reason)
-                }
+        for (_repo, (source, targets)) in repo_groups {
+            // Determine what we need from this repo
+            let any_needs_tags = targets.iter().any(|t| t.needs_tags);
+            let any_needs_head = targets.iter().any(|t| !t.needs_tags);
+
+            // One ls-remote call for HEAD (if needed)
+            let remote_head = if any_needs_head {
+                // For modules with different refs, we'd need per-ref queries,
+                // but most share the same ref (or none). Query HEAD + any unique refs.
+                installer::ls_remote_ref(&source, None).ok()
+            } else {
+                None
             };
-            if tx.send((idx, status)).is_err() {
-                break; // App closed
+
+            // One ls-remote --tags call (if needed)
+            let remote_tags = if any_needs_tags {
+                installer::ls_remote_tags(&source).ok()
+            } else {
+                None
+            };
+
+            // Distribute results to all modules in this group
+            for target in &targets {
+                // For non-HEAD refs, we may need a specific query
+                let head_for_module = if !target.needs_tags {
+                    if target.source_info.git_ref.is_some()
+                        && target.source_info.git_ref.as_deref() != Some("HEAD")
+                    {
+                        // This module has a non-semver pinned ref — query it specifically
+                        // (only if different from HEAD which we already have)
+                        installer::ls_remote_ref(&source, target.source_info.git_ref.as_deref())
+                            .ok()
+                    } else {
+                        remote_head.clone()
+                    }
+                } else {
+                    None
+                };
+
+                let status = installer::evaluate_update_status(
+                    &target.source_info,
+                    &target.name,
+                    head_for_module.as_deref(),
+                    remote_tags.as_deref(),
+                );
+
+                let module_status = match status {
+                    installer::UpdateStatus::Updated { new_commit, .. } => {
+                        ModuleUpdateStatus::UpdateAvailable { new_commit }
+                    }
+                    installer::UpdateStatus::NewerTag {
+                        current_tag,
+                        latest_tag,
+                        ..
+                    } => ModuleUpdateStatus::NewerTagAvailable {
+                        current_tag,
+                        latest_tag,
+                    },
+                    installer::UpdateStatus::UpToDate { .. } => ModuleUpdateStatus::UpToDate,
+                    installer::UpdateStatus::Skipped { .. } => ModuleUpdateStatus::Skipped,
+                    installer::UpdateStatus::Failed { reason, .. } => {
+                        ModuleUpdateStatus::Failed(reason)
+                    }
+                };
+
+                if tx.send((target.idx, module_status)).is_err() {
+                    return; // App closed
+                }
             }
         }
     });
@@ -239,6 +336,8 @@ impl App {
             scan_tx: tx,
             tick_count: 0,
             info_confirm_remove: false,
+            info_confirm_update: None,
+            confirm_update_all: false,
             pending_editor: None,
             drill: DrillState::new(),
             module_list_index: 0,
@@ -969,52 +1068,176 @@ impl App {
     }
 
     /// Start updating a single module from the info panel.
+    /// Start updating a single module from the info panel.
     pub fn start_module_update(&mut self, module_idx: usize) {
+        self.start_update_modules(&[module_idx]);
+    }
+
+    /// Find outdated sibling modules from the same repository as the given module.
+    /// Returns indices of other modules (not including `module_idx`) that are from
+    /// the same repo and have updates available.
+    pub fn outdated_siblings(&self, module_idx: usize) -> Vec<usize> {
+        use crate::module::installer;
+
+        let ms = &self.modules[module_idx];
+        let repo = ms
+            .manifest_path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .and_then(installer::read_source_info)
+            .map(|s| s.repository);
+
+        let repo = match repo {
+            Some(r) => r,
+            None => return Vec::new(),
+        };
+
+        self.modules
+            .iter()
+            .enumerate()
+            .filter(|&(i, ms)| {
+                i != module_idx
+                    && matches!(
+                        &ms.update_status,
+                        Some(
+                            ModuleUpdateStatus::UpdateAvailable { .. }
+                                | ModuleUpdateStatus::NewerTagAvailable { .. }
+                        )
+                    )
+                    && ms
+                        .manifest_path
+                        .as_ref()
+                        .and_then(|p| p.parent())
+                        .and_then(installer::read_source_info)
+                        .map(|s| s.repository == repo)
+                        .unwrap_or(false)
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Start updating specific modules by index in a single background task.
+    pub fn start_update_modules(&mut self, indices: &[usize]) {
         use crate::module::installer;
         use crate::module::source::SourceFile;
 
-        let ms = &self.modules[module_idx];
-        let module_dir = match ms.manifest_path.as_ref().and_then(|p| p.parent()) {
-            Some(dir) => dir.to_path_buf(),
-            None => return,
-        };
-        let modules_dir = match module_dir.parent() {
-            Some(dir) => dir.to_path_buf(),
-            None => return,
-        };
+        let mut targets: Vec<(usize, PathBuf, PathBuf)> = Vec::new();
 
-        // For tag upgrades, update source.toml to the new tag before running update_module
-        if let Some(ModuleUpdateStatus::NewerTagAvailable { latest_tag, .. }) = &ms.update_status {
-            if let Some(mut source_info) = installer::read_source_info(&module_dir) {
-                source_info.git_ref = Some(latest_tag.clone());
-                let source_file = SourceFile {
-                    source: source_info,
-                };
-                if let Ok(content) = toml::to_string_pretty(&source_file) {
-                    let _ = std::fs::write(module_dir.join("source.toml"), content);
+        for &idx in indices {
+            let ms = &self.modules[idx];
+            let has_update = matches!(
+                &ms.update_status,
+                Some(
+                    ModuleUpdateStatus::UpdateAvailable { .. }
+                        | ModuleUpdateStatus::NewerTagAvailable { .. }
+                )
+            );
+            if !has_update {
+                continue;
+            }
+
+            let module_dir = match ms.manifest_path.as_ref().and_then(|p| p.parent()) {
+                Some(dir) => dir.to_path_buf(),
+                None => continue,
+            };
+            let modules_dir = match module_dir.parent() {
+                Some(dir) => dir.to_path_buf(),
+                None => continue,
+            };
+
+            // For tag upgrades, update source.toml to the new tag
+            if let Some(ModuleUpdateStatus::NewerTagAvailable { latest_tag, .. }) =
+                &ms.update_status
+            {
+                if let Some(mut source_info) = installer::read_source_info(&module_dir) {
+                    source_info.git_ref = Some(latest_tag.clone());
+                    let source_file = SourceFile {
+                        source: source_info,
+                    };
+                    if let Ok(content) = toml::to_string_pretty(&source_file) {
+                        let _ = std::fs::write(module_dir.join("source.toml"), content);
+                    }
                 }
             }
+
+            targets.push((idx, module_dir, modules_dir));
         }
 
-        // Mark as updating
-        self.modules[module_idx].update_status = Some(ModuleUpdateStatus::Checking);
+        if targets.is_empty() {
+            return;
+        }
+
+        let count = targets.len();
+
+        for &(idx, _, _) in &targets {
+            self.modules[idx].update_status = Some(ModuleUpdateStatus::Checking);
+        }
 
         let (tx, rx) = mpsc::unbounded_channel();
         self.update_check_rx = Some(rx);
 
         tokio::task::spawn_blocking(move || {
-            let status = match installer::update_module(&module_dir, &modules_dir) {
-                installer::UpdateStatus::Updated { .. } => ModuleUpdateStatus::UpToDate,
-                installer::UpdateStatus::UpToDate { .. } => ModuleUpdateStatus::UpToDate,
-                installer::UpdateStatus::Failed { reason, .. } => {
-                    ModuleUpdateStatus::Failed(reason)
+            for (idx, module_dir, modules_dir) in targets {
+                let status = match installer::update_module(&module_dir, &modules_dir) {
+                    installer::UpdateStatus::Updated { .. } => ModuleUpdateStatus::UpToDate,
+                    installer::UpdateStatus::UpToDate { .. } => ModuleUpdateStatus::UpToDate,
+                    installer::UpdateStatus::Failed { reason, .. } => {
+                        ModuleUpdateStatus::Failed(reason)
+                    }
+                    _ => ModuleUpdateStatus::Skipped,
+                };
+                if tx.send((idx, status)).is_err() {
+                    break;
                 }
-                _ => ModuleUpdateStatus::Skipped,
-            };
-            let _ = tx.send((module_idx, status));
+            }
         });
 
-        self.set_flash("Updating module...".to_string(), FlashLevel::Info);
+        self.set_flash(
+            format!(
+                "Updating {} module{}...",
+                count,
+                if count == 1 { "" } else { "s" }
+            ),
+            FlashLevel::Info,
+        );
+    }
+
+    /// Count modules that have updates available.
+    pub fn outdated_module_count(&self) -> usize {
+        self.modules
+            .iter()
+            .filter(|ms| {
+                matches!(
+                    &ms.update_status,
+                    Some(
+                        ModuleUpdateStatus::UpdateAvailable { .. }
+                            | ModuleUpdateStatus::NewerTagAvailable { .. }
+                    )
+                )
+            })
+            .count()
+    }
+
+    /// Start updating all outdated modules.
+    pub fn start_update_all(&mut self) {
+        let indices: Vec<usize> = self
+            .modules
+            .iter()
+            .enumerate()
+            .filter(|(_, ms)| {
+                matches!(
+                    &ms.update_status,
+                    Some(
+                        ModuleUpdateStatus::UpdateAvailable { .. }
+                            | ModuleUpdateStatus::NewerTagAvailable { .. }
+                    )
+                )
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        self.start_update_modules(&indices);
+        self.confirm_update_all = false;
     }
 
     /// Process background update check results and store them in module state.
@@ -1233,6 +1456,8 @@ impl App {
             scan_tx: tx,
             tick_count: 0,
             info_confirm_remove: false,
+            info_confirm_update: None,
+            confirm_update_all: false,
             pending_editor: None,
             drill: DrillState::new(),
             module_list_index: 0,

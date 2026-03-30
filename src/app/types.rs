@@ -56,6 +56,16 @@ pub enum ModuleUpdateStatus {
     Failed(String),
 }
 
+/// State for the "update siblings?" confirmation modal in the info panel.
+pub struct SiblingUpdatePrompt {
+    /// The module the user pressed `u` on.
+    pub current_idx: usize,
+    /// Sibling module indices from the same repo that also have updates.
+    pub sibling_indices: Vec<usize>,
+    /// Currently highlighted choice (0 = all, 1 = this only, 2 = cancel).
+    pub selected: usize,
+}
+
 /// Loading/discovery status of a module.
 pub enum ModuleStatus {
     Loading,
