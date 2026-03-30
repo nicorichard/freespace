@@ -230,7 +230,7 @@ pub fn filtered_confirm_item_count(app: &App) -> usize {
 }
 
 /// Handle click events for the cleanup confirmation view.
-pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) {
+pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) -> bool {
     let inner_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -246,11 +246,11 @@ pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) {
     let content_top = table_area.y;
     let content_height = table_area.height as usize;
     if content_height == 0 || row < content_top {
-        return;
+        return false;
     }
     let clicked_visual_offset = (row - content_top) as usize;
     if clicked_visual_offset >= content_height {
-        return;
+        return false;
     }
 
     let item_count = filtered_confirm_item_count(app);
@@ -262,6 +262,9 @@ pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) {
         if on_checkbox {
             app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
         }
+        true
+    } else {
+        false
     }
 }
 
@@ -600,6 +603,7 @@ mod tests {
             total_size: Some(5_000_001_000),
             status: ModuleStatus::Ready,
             manifest_path: None,
+            update_status: None,
         };
         let mut app = App::new_for_test(vec![ms]);
         // Select both items

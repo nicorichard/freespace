@@ -291,7 +291,7 @@ fn filtered_deduped_total(app: &App) -> u64 {
 }
 
 /// Handle click events for the module list view.
-pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) {
+pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) -> bool {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -306,11 +306,11 @@ pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) {
     let content_top = table_area.y + 1;
     let content_height = table_area.height.saturating_sub(2) as usize;
     if row < content_top || content_height == 0 {
-        return;
+        return false;
     }
     let clicked_visual_offset = (row - content_top) as usize;
     if clicked_visual_offset >= content_height {
-        return;
+        return false;
     }
 
     let all_sorted = all_sorted_module_indices(app);
@@ -320,7 +320,7 @@ pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) {
     let clicked_all_idx = scroll_offset + clicked_visual_offset;
 
     if clicked_all_idx >= all_sorted.len() {
-        return;
+        return false;
     }
     let clicked_module_idx = all_sorted[clicked_all_idx];
     if let Some(nav_pos) = navigable.iter().position(|&i| i == clicked_module_idx) {
@@ -329,6 +329,9 @@ pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) {
         if on_checkbox {
             app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
         }
+        true
+    } else {
+        false
     }
 }
 
@@ -677,6 +680,7 @@ mod tests {
             total_size: Some(size),
             status: ModuleStatus::Ready,
             manifest_path: None,
+            update_status: None,
         }
     }
 
@@ -705,6 +709,7 @@ mod tests {
             total_size: Some(0),
             status: ModuleStatus::Ready,
             manifest_path: None,
+            update_status: None,
         };
         let app = App::new_for_test(vec![m]);
         let sorted = sorted_module_indices(&app);

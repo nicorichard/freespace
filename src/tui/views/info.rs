@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
-use crate::app::{App, View};
+use crate::app::{App, ModuleUpdateStatus, View};
 use crate::module::installer;
 use crate::module::manifest::{RestoreKind, RiskLevel};
 use crate::tui::widgets::centered_rect;
@@ -69,6 +69,19 @@ pub fn handle_key(app: &mut App, key: KeyCode, module_idx: usize) {
         }
         KeyCode::Char('r') => {
             app.info_confirm_remove = true;
+        }
+        KeyCode::Char('u') => {
+            // Trigger module update if an update is available
+            let has_update = matches!(
+                &app.modules[module_idx].update_status,
+                Some(
+                    ModuleUpdateStatus::UpdateAvailable { .. }
+                        | ModuleUpdateStatus::NewerTagAvailable { .. }
+                )
+            );
+            if has_update {
+                app.start_module_update(module_idx);
+            }
         }
         _ => {}
     }
@@ -231,6 +244,49 @@ fn render_metadata(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usi
             label_style,
             value_style,
         ));
+
+        // Update status row
+        let update_row = match &ms.update_status {
+            None | Some(ModuleUpdateStatus::Checking) => Some(Row::new(vec![
+                Span::styled("Update", label_style),
+                Span::styled("checking...", app.theme.style_description()),
+            ])),
+            Some(ModuleUpdateStatus::UpdateAvailable { new_commit }) => {
+                let short = if new_commit.len() > 7 {
+                    &new_commit[..7]
+                } else {
+                    new_commit
+                };
+                Some(Row::new(vec![
+                    Span::styled("Update", label_style),
+                    Span::styled(
+                        format!("available ({}), press [u] to update", short),
+                        app.theme.style_warning(),
+                    ),
+                ]))
+            }
+            Some(ModuleUpdateStatus::NewerTagAvailable {
+                current_tag,
+                latest_tag,
+            }) => Some(Row::new(vec![
+                Span::styled("Update", label_style),
+                Span::styled(
+                    format!(
+                        "{} -> {} available, press [u] to update",
+                        current_tag, latest_tag
+                    ),
+                    app.theme.style_warning(),
+                ),
+            ])),
+            Some(ModuleUpdateStatus::UpToDate) => Some(Row::new(vec![
+                Span::styled("Update", label_style),
+                Span::styled("up to date", app.theme.style_description()),
+            ])),
+            Some(ModuleUpdateStatus::Skipped | ModuleUpdateStatus::Failed(_)) => None,
+        };
+        if let Some(row) = update_row {
+            rows.push(row);
+        }
     }
 
     // Show manifest path
@@ -263,9 +319,21 @@ fn render_metadata(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usi
         let action_style = Style::default()
             .fg(app.theme.size_fg)
             .add_modifier(Modifier::BOLD);
+        let has_update = matches!(
+            &ms.update_status,
+            Some(
+                ModuleUpdateStatus::UpdateAvailable { .. }
+                    | ModuleUpdateStatus::NewerTagAvailable { .. }
+            )
+        );
+        let right_actions = if has_update {
+            "[o]pen  [u]pdate  [r]emove"
+        } else {
+            "[o]pen  [r]emove"
+        };
         rows.push(Row::new(vec![
             Span::styled("[e]dit", action_style),
-            Span::styled("[o]pen  [r]emove", action_style),
+            Span::styled(right_actions, action_style),
         ]));
     }
 
