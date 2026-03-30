@@ -162,7 +162,7 @@ impl InstallSelectState {
         let total = self.candidates.len();
         let left = keybinding_bar(
             &[
-                ("space", "toggle"),
+                ("␣", "toggle"),
                 ("a", "all"),
                 ("n", "none"),
                 ("enter", "confirm"),
@@ -178,7 +178,7 @@ impl InstallSelectState {
             format!("{}/{} selected", selected_count, total),
             self.theme.style_size(),
         ));
-        render_status_line(frame, chunks[2], Line::from(spans), &self.theme);
+        render_status_line(frame, chunks[2], Line::from(spans), &self.theme, false);
     }
 }
 

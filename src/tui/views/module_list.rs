@@ -622,18 +622,19 @@ fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect) {
         shown,
         total,
         &[
-            ("space", "select"),
+            ("␣", "select"),
             ("a", "all"),
             ("n", "none"),
             ("i", "info"),
             ("/", "search"),
             ("f", "filter"),
             ("c", "clean"),
-            ("tab", "all items"),
+            ("⇥", "flat"),
             ("?", "help"),
             ("q", "quit"),
         ],
         !app.selected_items.is_empty(),
+        app.version_hover,
     );
 }
 

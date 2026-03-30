@@ -88,20 +88,34 @@ pub fn keybinding_bar<'a>(
     Line::from(spans)
 }
 
-/// Render a status bar line with a right-aligned version string.
+/// Render a status bar line with a right-aligned version link.
 ///
 /// Splits `area` into a left region (for `left` content) and a right region
-/// showing `vX.Y.Z` in dim style.
-pub fn render_status_line(frame: &mut Frame, area: Rect, left: Line<'_>, theme: &Theme) {
+/// showing `vX.Y.Z` underlined as a clickable link. On hover the style brightens.
+pub fn render_status_line(
+    frame: &mut Frame,
+    area: Rect,
+    left: Line<'_>,
+    theme: &Theme,
+    version_hover: bool,
+) {
+    use ratatui::style::Modifier;
+
     let version = format!("v{} ", env!("CARGO_PKG_VERSION"));
     let version_width = version.len() as u16;
 
     let chunks =
         Layout::horizontal([Constraint::Min(0), Constraint::Length(version_width)]).split(area);
 
+    let version_style = if version_hover {
+        theme.style_size().add_modifier(Modifier::UNDERLINED)
+    } else {
+        theme.style_border().add_modifier(Modifier::UNDERLINED)
+    };
+
     frame.render_widget(Paragraph::new(left), chunks[0]);
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(version, theme.style_border()))),
+        Paragraph::new(Line::from(Span::styled(version, version_style))),
         chunks[1],
     );
 }
@@ -172,6 +186,7 @@ pub fn render_view_status_bar(
     total: usize,
     bindings: &[(&str, &str)],
     can_clean: bool,
+    version_hover: bool,
 ) {
     let filter_indicator: Vec<Span> = if has_structured_filter {
         vec![
@@ -206,7 +221,7 @@ pub fn render_view_status_bar(
         bar.spans.extend(filter_indicator);
         bar
     };
-    render_status_line(frame, area, line, theme);
+    render_status_line(frame, area, line, theme, version_hover);
 }
 
 /// Check if a click column is in the checkbox zone of a table area.

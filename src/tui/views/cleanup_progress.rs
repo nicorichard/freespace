@@ -86,7 +86,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         frame.render_widget(hint, chunks[2]);
 
         let bar = keybinding_bar(&[("q", "quit"), ("any", "continue")], &app.theme, false);
-        render_status_line(frame, chunks[4], bar, &app.theme);
+        render_status_line(frame, chunks[4], bar, &app.theme, app.version_hover);
     } else {
         // In-progress
         let spinner = SPINNER_CHARS[app.tick_count % SPINNER_CHARS.len()];
@@ -108,6 +108,6 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         }
 
         let bar = keybinding_bar(&[("esc", "halt")], &app.theme, false);
-        render_status_line(frame, chunks[4], bar, &app.theme);
+        render_status_line(frame, chunks[4], bar, &app.theme, app.version_hover);
     }
 }

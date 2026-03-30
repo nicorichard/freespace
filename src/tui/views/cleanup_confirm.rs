@@ -535,7 +535,7 @@ fn render_action_bar(app: &mut App, frame: &mut Frame, area: Rect, shown: usize,
         shown,
         total,
         &[
-            ("space", "toggle"),
+            ("␣", "toggle"),
             ("a", "all"),
             ("t", "trash"),
             ("d", "delete"),
@@ -543,6 +543,7 @@ fn render_action_bar(app: &mut App, frame: &mut Frame, area: Rect, shown: usize,
             ("/", "search"),
         ],
         false,
+        app.version_hover,
     );
 }
 

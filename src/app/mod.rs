@@ -117,6 +117,8 @@ pub struct App {
     /// Last left-click position and time, for double-click detection.
     /// The bool indicates whether the click hit a valid row.
     last_click: Option<(Instant, u16, u16, bool)>,
+    /// Whether the mouse is hovering over the version link.
+    pub version_hover: bool,
     /// Whether to display icons (from config).
     pub icons_enabled: bool,
     /// Cancel token for the in-progress scan tasks.
@@ -260,6 +262,7 @@ impl App {
             confirm_checked: BTreeSet::new(),
             view_offset: 0,
             last_click: None,
+            version_hover: false,
             icons_enabled: config.icons.enabled,
             scan_cancel,
             update_check_rx,
@@ -688,7 +691,19 @@ impl App {
         }
     }
 
-    /// Handle mouse events: scroll wheel and left-click.
+    /// Check if the given screen position is over the version link.
+    fn is_version_hit(col: u16, row: u16) -> bool {
+        if let Ok((width, height)) = crossterm::terminal::size() {
+            let version = format!("v{} ", env!("CARGO_PKG_VERSION"));
+            let version_width = version.len() as u16;
+            let last_row = height.saturating_sub(1);
+            row == last_row && col >= width.saturating_sub(version_width)
+        } else {
+            false
+        }
+    }
+
+    /// Handle mouse events: scroll wheel, left-click, and hover.
     fn handle_mouse(&mut self, kind: MouseEventKind, col: u16, row: u16) {
         match kind {
             MouseEventKind::ScrollUp => {
@@ -697,7 +712,15 @@ impl App {
             MouseEventKind::ScrollDown => {
                 self.view_offset = self.view_offset.saturating_add(1);
             }
+            MouseEventKind::Moved => {
+                self.version_hover = Self::is_version_hit(col, row);
+            }
             MouseEventKind::Down(MouseButton::Left) => {
+                if Self::is_version_hit(col, row) {
+                    let _ = open::that("https://github.com/nicorichard/freespace");
+                    return;
+                }
+
                 // Double-click detection: if same row within 400ms, treat as Enter
                 let now = Instant::now();
                 let is_double = self
@@ -1233,6 +1256,7 @@ impl App {
             confirm_checked: BTreeSet::new(),
             view_offset: 0,
             last_click: None,
+            version_hover: false,
             icons_enabled: true,
             scan_cancel: Arc::new(AtomicBool::new(false)),
             update_check_rx: None,
