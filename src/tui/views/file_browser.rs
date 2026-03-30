@@ -404,26 +404,14 @@ fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect, _module_idx: 
     render_view_status_bar(
         frame,
         area,
-        &app.theme,
+        app,
         app.flash_message.as_ref().map(|(m, l)| (m.as_str(), l)),
         app.filter_active,
         &app.filter_query,
         app.has_structured_filter(),
         shown,
         items.len(),
-        &[
-            ("␣", "select"),
-            ("a", "all"),
-            ("n", "none"),
-            ("o", "open"),
-            ("/", "search"),
-            ("f", "filter"),
-            ("c", "clean"),
-            ("esc", "back"),
-            ("?", "help"),
-            ("q", "quit"),
-        ],
-        !app.selected_items.is_empty(),
+        crate::tui::keybindings::FILE_BROWSER,
         app.version_hover,
     );
 }

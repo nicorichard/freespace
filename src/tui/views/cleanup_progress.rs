@@ -85,7 +85,11 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         .alignment(Alignment::Center);
         frame.render_widget(hint, chunks[2]);
 
-        let bar = keybinding_bar(&[("q", "quit"), ("any", "continue")], &app.theme, false);
+        let bar = keybinding_bar(
+            crate::tui::keybindings::CLEANUP_PROGRESS_HALTED,
+            &app.theme,
+            Some(app),
+        );
         render_status_line(frame, chunks[4], bar, &app.theme, app.version_hover);
     } else {
         // In-progress
@@ -107,7 +111,11 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             frame.render_widget(file_line, chunks[2]);
         }
 
-        let bar = keybinding_bar(&[("esc", "halt")], &app.theme, false);
+        let bar = keybinding_bar(
+            crate::tui::keybindings::CLEANUP_PROGRESS_ACTIVE,
+            &app.theme,
+            Some(app),
+        );
         render_status_line(frame, chunks[4], bar, &app.theme, app.version_hover);
     }
 }

@@ -160,17 +160,7 @@ impl InstallSelectState {
         // Status bar
         let selected_count = self.selected.iter().filter(|&&s| s).count();
         let total = self.candidates.len();
-        let left = keybinding_bar(
-            &[
-                ("␣", "toggle"),
-                ("a", "all"),
-                ("n", "none"),
-                ("enter", "confirm"),
-                ("esc", "cancel"),
-            ],
-            &self.theme,
-            false,
-        );
+        let left = keybinding_bar(crate::tui::keybindings::INSTALL_SELECT, &self.theme, None);
         // Combine keybinding bar with selection count
         let mut spans = left.spans;
         spans.push(Span::styled(" \u{2502} ", self.theme.style_border()));

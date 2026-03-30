@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
-use crate::app::{App, ModuleUpdateStatus, View};
+use crate::app::{App, ModuleUpdateStatus, SiblingUpdatePrompt, View};
 use crate::module::installer;
 use crate::module::manifest::{RestoreKind, RiskLevel};
 use crate::tui::widgets::centered_rect;
@@ -50,6 +50,35 @@ pub fn handle_key(app: &mut App, key: KeyCode, module_idx: usize) {
         return;
     }
 
+    if let Some(mut prompt) = app.info_confirm_update.take() {
+        match key {
+            KeyCode::Up | KeyCode::Char('k') => {
+                prompt.selected = prompt.selected.saturating_sub(1);
+                app.info_confirm_update = Some(prompt);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                prompt.selected = (prompt.selected + 1).min(2);
+                app.info_confirm_update = Some(prompt);
+            }
+            KeyCode::Enter => match prompt.selected {
+                0 => {
+                    let mut all = vec![prompt.current_idx];
+                    all.extend(prompt.sibling_indices);
+                    app.start_update_modules(&all);
+                }
+                1 => {
+                    app.start_module_update(prompt.current_idx);
+                }
+                _ => { /* cancel */ }
+            },
+            KeyCode::Esc => { /* cancel */ }
+            _ => {
+                app.info_confirm_update = Some(prompt);
+            }
+        }
+        return;
+    }
+
     match key {
         KeyCode::Esc | KeyCode::Char('i') => {
             app.set_view(app.previous_view);
@@ -71,7 +100,6 @@ pub fn handle_key(app: &mut App, key: KeyCode, module_idx: usize) {
             app.info_confirm_remove = true;
         }
         KeyCode::Char('u') => {
-            // Trigger module update if an update is available
             let has_update = matches!(
                 &app.modules[module_idx].update_status,
                 Some(
@@ -80,7 +108,16 @@ pub fn handle_key(app: &mut App, key: KeyCode, module_idx: usize) {
                 )
             );
             if has_update {
-                app.start_module_update(module_idx);
+                let siblings = app.outdated_siblings(module_idx);
+                if siblings.is_empty() {
+                    app.start_module_update(module_idx);
+                } else {
+                    app.info_confirm_update = Some(SiblingUpdatePrompt {
+                        current_idx: module_idx,
+                        sibling_indices: siblings,
+                        selected: 0,
+                    });
+                }
             }
         }
         _ => {}
@@ -112,6 +149,11 @@ pub fn render(app: &mut App, frame: &mut Frame, module_idx: usize) {
     render_header(app, frame, inner_chunks[0], module_idx);
     render_metadata(app, frame, inner_chunks[1], module_idx);
     render_footer(app, frame, inner_chunks[2]);
+
+    // Render update confirmation modal on top if active
+    if app.info_confirm_update.is_some() {
+        render_update_confirm(app, frame, area);
+    }
 }
 
 fn render_header(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usize) {
@@ -304,7 +346,7 @@ fn render_metadata(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usi
     // Blank line before actions
     rows.push(Row::new(vec![Span::raw(""), Span::raw("")]));
 
-    // Action bar or remove confirmation
+    // Action bar, remove confirmation, or update confirmation
     if app.info_confirm_remove {
         rows.push(Row::new(vec![
             Span::styled("Remove module?", app.theme.style_warning()),
@@ -427,4 +469,69 @@ fn render_footer(app: &mut App, frame: &mut Frame, area: Rect) {
         app.theme.style_normal(),
     )]));
     frame.render_widget(footer, area);
+}
+
+/// Render a confirmation modal for updating sibling modules from the same repo.
+fn render_update_confirm(app: &mut App, frame: &mut Frame, area: Rect) {
+    let prompt = match &app.info_confirm_update {
+        Some(v) => v,
+        None => return,
+    };
+
+    let sibling_count = prompt.sibling_indices.len();
+    let selected = prompt.selected;
+
+    let height: u16 = 9;
+    let width = (area.width * 50 / 100).max(44).min(area.width);
+    let x = (area.width.saturating_sub(width)) / 2;
+    let y = (area.height.saturating_sub(height)) / 2;
+    let modal_area = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, modal_area);
+
+    let bold = Style::default()
+        .fg(app.theme.header_fg)
+        .add_modifier(Modifier::BOLD);
+    let normal = app.theme.style_normal();
+    let dim = app.theme.style_description();
+
+    let options = [
+        format!("Update all {} modules", sibling_count + 1),
+        "Update only this module".to_string(),
+        "Cancel".to_string(),
+    ];
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!(
+                "  {} other module{} from the same repository",
+                sibling_count,
+                if sibling_count == 1 { " is" } else { "s are" }
+            ),
+            bold,
+        )),
+        Line::from(Span::styled("  also outdated.", bold)),
+        Line::from(""),
+    ];
+
+    for (i, label) in options.iter().enumerate() {
+        let (marker, style) = if i == selected {
+            ("\u{25b8} ", normal) // ▸
+        } else {
+            ("  ", dim)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {} {}", marker, label),
+            style,
+        )));
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(app.theme.style_border())
+        .style(app.theme.style_normal());
+
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, modal_area);
 }

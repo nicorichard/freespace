@@ -9,7 +9,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{matches_filter, matches_structured_filter, App, ModuleStatus, ScanStatus, View};
+use crate::app::{
+    matches_filter, matches_structured_filter, App, ModuleStatus, ModuleUpdateStatus, ScanStatus,
+    View,
+};
 use crate::tui::widgets::{
     checkbox_str, cmp_size_desc, format_size, format_size_or_placeholder, is_checkbox_click,
     parse_hex_color, render_view_status_bar, CheckState, ICON_DEFAULT_MODULE, SPINNER_CHARS,
@@ -20,6 +23,20 @@ const PAGE_SIZE: usize = 20;
 
 /// Handle key events for the module list view.
 pub fn handle_key(app: &mut App, key: KeyCode) {
+    // Handle update-all confirmation prompt
+    if app.confirm_update_all {
+        match key {
+            KeyCode::Char('y') => {
+                app.start_update_all();
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                app.confirm_update_all = false;
+            }
+            _ => {}
+        }
+        return;
+    }
+
     let sorted = sorted_module_indices(app);
     let count = sorted.len();
 
@@ -152,6 +169,12 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
             app.clear_filter();
             app.set_view(View::FlatView);
             app.selected_index = 0;
+        }
+        // Update all outdated modules (with confirmation)
+        KeyCode::Char('U') => {
+            if app.outdated_module_count() > 0 {
+                app.confirm_update_all = true;
+            }
         }
         // Esc: clear filter
         KeyCode::Esc => {
@@ -509,10 +532,22 @@ fn render_module_table(app: &mut App, frame: &mut Frame, area: Rect) {
             .and_then(parse_hex_color)
             .map(|c| text_style.fg(c))
             .unwrap_or(text_style);
-        let name_cell = Cell::from(Line::from(vec![
+        let has_update = matches!(
+            &ms.update_status,
+            Some(
+                ModuleUpdateStatus::UpdateAvailable { .. }
+                    | ModuleUpdateStatus::NewerTagAvailable { .. }
+            )
+        );
+        let mut name_spans = vec![
             Span::styled(format!("{} ", icon), icon_style),
             Span::styled(&ms.module.name, text_style),
-        ]));
+        ];
+        if has_update {
+            name_spans.push(Span::styled(" \u{2191}", app.theme.style_warning()));
+            // ↑
+        }
+        let name_cell = Cell::from(Line::from(name_spans));
 
         // Items count
         let items_cell = Cell::from(Span::styled(
@@ -611,29 +646,32 @@ fn render_description_pane(app: &mut App, frame: &mut Frame, area: Rect) {
 fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect) {
     let shown = sorted_module_indices(app).len();
     let total = app.modules.len();
+
+    // Show confirmation prompt as a flash message when update-all is pending
+    let confirm_msg;
+    let flash = if app.confirm_update_all {
+        let count = app.outdated_module_count();
+        confirm_msg = format!(
+            "Update {} module{}? [y]es [n]o",
+            count,
+            if count == 1 { "" } else { "s" }
+        );
+        Some((confirm_msg.as_str(), &crate::app::FlashLevel::Warning))
+    } else {
+        app.flash_message.as_ref().map(|(m, l)| (m.as_str(), l))
+    };
+
     render_view_status_bar(
         frame,
         area,
-        &app.theme,
-        app.flash_message.as_ref().map(|(m, l)| (m.as_str(), l)),
+        app,
+        flash,
         app.filter_active,
         &app.filter_query,
         app.has_structured_filter(),
         shown,
         total,
-        &[
-            ("␣", "select"),
-            ("a", "all"),
-            ("n", "none"),
-            ("i", "info"),
-            ("/", "search"),
-            ("f", "filter"),
-            ("c", "clean"),
-            ("⇥", "flat"),
-            ("?", "help"),
-            ("q", "quit"),
-        ],
-        !app.selected_items.is_empty(),
+        crate::tui::keybindings::MODULE_LIST,
         app.version_hover,
     );
 }
