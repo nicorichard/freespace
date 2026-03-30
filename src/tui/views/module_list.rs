@@ -91,19 +91,22 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
         // Toggle selection for all items in the focused module
         KeyCode::Char(' ') => {
             if let Some(&module_idx) = sorted.get(app.selected_index) {
+                use crate::tui::widgets::CheckState;
                 let items = &app.modules[module_idx].items;
-                let all_selected = !items.is_empty()
+                // Check if every item has any selection (full or partial from drill-down)
+                let any_selected = !items.is_empty()
                     && items
                         .iter()
-                        .all(|item| app.selected_items.contains(&item.path));
-                if all_selected {
-                    // Deselect all
-                    for item in &app.modules[module_idx].items {
-                        app.selected_items.remove(&item.path);
-                    }
+                        .all(|item| !matches!(app.check_state(&item.path), CheckState::None));
+                if any_selected {
+                    // Deselect all (including any drill-down sub-selections)
+                    let paths: Vec<PathBuf> = items.iter().map(|item| item.path.clone()).collect();
+                    app.selected_items
+                        .retain(|p| !paths.iter().any(|root| p.starts_with(root)));
                 } else {
-                    // Select all
+                    // Select all top-level items, clearing any drill-down sub-selections
                     for item in &app.modules[module_idx].items {
+                        app.selected_items.retain(|p| !p.starts_with(&item.path));
                         app.selected_items.insert(item.path.clone());
                     }
                 }
@@ -112,28 +115,22 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
         // Select all items across all visible (filtered) modules
         KeyCode::Char('a') => {
             for &module_idx in &sorted {
-                let paths: Vec<PathBuf> = app.modules[module_idx]
-                    .items
-                    .iter()
-                    .map(|item| item.path.clone())
-                    .collect();
-                for path in paths {
-                    app.selected_items.insert(path);
+                for item in &app.modules[module_idx].items {
+                    // Clear any drill-down sub-selections under this item
+                    app.selected_items.retain(|p| !p.starts_with(&item.path));
+                    app.selected_items.insert(item.path.clone());
                 }
             }
         }
         // Deselect all items across all visible (filtered) modules
         KeyCode::Char('n') => {
-            for &module_idx in &sorted {
-                let paths: Vec<PathBuf> = app.modules[module_idx]
-                    .items
-                    .iter()
-                    .map(|item| item.path.clone())
-                    .collect();
-                for path in paths {
-                    app.selected_items.remove(&path);
-                }
-            }
+            let roots: Vec<PathBuf> = sorted
+                .iter()
+                .flat_map(|&mi| app.modules[mi].items.iter().map(|item| item.path.clone()))
+                .collect();
+            // Remove exact matches AND any drill-down sub-selections
+            app.selected_items
+                .retain(|p| !roots.iter().any(|root| p.starts_with(root)));
         }
         // Open help overlay
         KeyCode::Char('?') => {

@@ -43,6 +43,8 @@ Every module must have a `module.toml` at the root of its directory. All top-lev
 | `description` | String | Yes | What this module scans and whether it's safe to delete |
 | `author` | String | Yes | Author name or handle |
 | `platforms` | Array of strings | Yes | Supported platforms: `"macos"`, `"linux"`, `"windows"` |
+| `icon` | String | No | Nerd Font glyph — either a literal character or `U+XXXX`/`U+XXXXX` escape (must be in PUA range) |
+| `icon_color` | String | No | Hex color for the icon (e.g. `"#CE422B"`) |
 | `[[targets]]` | Array of tables | Yes | At least one target required |
 | `targets.path` | String | Yes | Path pattern (supports `~`, `*`, and `**/` for recursive search) |
 | `targets.description` | String | No | What this specific target contains |
@@ -162,6 +164,8 @@ version = "1.0.0"
 description = "Cached packages from npm, Yarn, and pnpm. Safe to delete; packages are re-downloaded on next install."
 author = "freespace"
 platforms = ["macos", "linux"]
+icon = "U+E718"
+icon_color = "#539E43"
 
 [[targets]]
 path = "~/.npm/_cacache"

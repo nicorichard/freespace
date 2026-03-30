@@ -122,16 +122,15 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
                 app.selected_items.insert(path);
             }
         }
-        // Deselect all visible items
+        // Deselect all visible items (including drill-down sub-selections)
         KeyCode::Char('n') => {
             let paths: Vec<PathBuf> = app.modules[module_idx]
                 .items
                 .iter()
                 .map(|item| item.path.clone())
                 .collect();
-            for path in paths {
-                app.selected_items.remove(&path);
-            }
+            app.selected_items
+                .retain(|p| !paths.iter().any(|root| p.starts_with(root)));
         }
         // Enter: drill into directory via FileBrowser
         KeyCode::Enter => {

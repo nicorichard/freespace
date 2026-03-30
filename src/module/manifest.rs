@@ -135,7 +135,8 @@ impl Module {
         let raw: RawModule = toml::from_str(toml_str)?;
         validate_id(&raw.id)?;
 
-        if let Some(ref icon) = raw.icon {
+        let icon = raw.icon.map(|s| resolve_icon_str(&s)).transpose()?;
+        if let Some(ref icon) = icon {
             validate_icon(icon)?;
         }
 
@@ -178,10 +179,27 @@ impl Module {
             author: raw.author,
             platforms: raw.platforms,
             tags: raw.tags,
-            icon: raw.icon,
+            icon,
             icon_color: raw.icon_color,
             targets,
         })
+    }
+}
+
+/// Resolve a `U+XXXX` or `U+XXXXX` escape to the actual character, or return
+/// the string as-is if it is already a literal glyph.
+fn resolve_icon_str(s: &str) -> Result<String> {
+    let re_like =
+        s.len() >= 6 && s.starts_with("U+") && s[2..].chars().all(|c| c.is_ascii_hexdigit());
+    if re_like {
+        let hex = &s[2..];
+        let cp = u32::from_str_radix(hex, 16)
+            .map_err(|_| anyhow::anyhow!("invalid Unicode escape: {s}"))?;
+        let ch =
+            char::from_u32(cp).ok_or_else(|| anyhow::anyhow!("invalid Unicode code point: {s}"))?;
+        Ok(ch.to_string())
+    } else {
+        Ok(s.to_string())
     }
 }
 
@@ -658,6 +676,70 @@ mod tests {
         "#;
         let err = Module::parse(toml_str).unwrap_err();
         assert!(err.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn parse_icon_unicode_escape_4digit() {
+        let toml_str = r#"
+        id = "uplus"
+        name = "uplus"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+        icon = "U+E7A8"
+        targets = []
+        "#;
+        let module = Module::parse(toml_str).unwrap();
+        assert_eq!(module.icon.as_deref(), Some("\u{e7a8}"));
+    }
+
+    #[test]
+    fn parse_icon_unicode_escape_5digit() {
+        let toml_str = r#"
+        id = "uplus5"
+        name = "uplus5"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+        icon = "U+F0000"
+        targets = []
+        "#;
+        let module = Module::parse(toml_str).unwrap();
+        assert_eq!(module.icon.as_deref(), Some("\u{F0000}"));
+    }
+
+    #[test]
+    fn parse_icon_unicode_escape_lowercase() {
+        let toml_str = r#"
+        id = "uplus-lower"
+        name = "uplus-lower"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+        icon = "U+e7a8"
+        targets = []
+        "#;
+        let module = Module::parse(toml_str).unwrap();
+        assert_eq!(module.icon.as_deref(), Some("\u{e7a8}"));
+    }
+
+    #[test]
+    fn parse_icon_unicode_escape_rejects_non_pua() {
+        let toml_str = r#"
+        id = "uplus-bad"
+        name = "uplus-bad"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+        icon = "U+0041"
+        targets = []
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains("Nerd Font"));
     }
 
     #[test]
