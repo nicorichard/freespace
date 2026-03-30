@@ -429,18 +429,19 @@ fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect, sorted: &[(us
         sorted.len(),
         total,
         &[
-            ("space", "select"),
+            ("␣", "select"),
             ("a", "all"),
             ("n", "none"),
             ("o", "open"),
             ("/", "search"),
             ("f", "filter"),
             ("c", "clean"),
-            ("tab", "modules"),
+            ("⇥", "grouped"),
             ("?", "help"),
             ("q", "quit"),
         ],
         !app.selected_items.is_empty(),
+        app.version_hover,
     );
 }
 

@@ -412,7 +412,7 @@ fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect, _module_idx: 
         shown,
         items.len(),
         &[
-            ("space", "select"),
+            ("␣", "select"),
             ("a", "all"),
             ("n", "none"),
             ("o", "open"),
@@ -424,5 +424,6 @@ fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect, _module_idx: 
             ("q", "quit"),
         ],
         !app.selected_items.is_empty(),
+        app.version_hover,
     );
 }
