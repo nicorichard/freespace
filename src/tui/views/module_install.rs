@@ -119,9 +119,15 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
                     app.filter_cursor = 0;
                     app.selected_index = 0;
                 }
-                // Confirm selection
+                // Confirm selection (only if something is checked)
                 KeyCode::Enter => {
-                    app.confirm_module_install();
+                    let any_checked = app
+                        .install_state
+                        .as_ref()
+                        .is_some_and(|s| s.candidates.iter().any(|c| c.checked));
+                    if any_checked {
+                        app.confirm_module_install();
+                    }
                 }
                 // Cancel
                 KeyCode::Char('q') => {
