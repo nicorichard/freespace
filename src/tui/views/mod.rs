@@ -7,4 +7,5 @@ pub mod help;
 pub mod info;
 pub mod install_select;
 pub mod module_detail;
+pub mod module_install;
 pub mod module_list;

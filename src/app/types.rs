@@ -23,6 +23,7 @@ pub enum View {
     Info(usize),
     FlatView,
     FileBrowser,
+    ModuleInstall,
 }
 
 /// State for a single loaded module including its discovered items.
@@ -102,6 +103,67 @@ pub struct Item {
 pub enum ItemType {
     File,
     Directory,
+}
+
+/// Phase of the module install picker flow.
+pub enum InstallPhase {
+    /// Cloning the repository in the background.
+    Cloning,
+    /// Showing the picker for the user to select modules.
+    Picking,
+    /// Installing/removing selected modules in the background.
+    Installing,
+    /// Done — results are ready.
+    Done,
+}
+
+/// A candidate module discovered in a source repo.
+pub struct InstallCandidate {
+    /// Directory name within the repo (used as install dir name).
+    pub dir_name: String,
+    /// Parsed module manifest.
+    pub module: Module,
+    /// Whether this module is currently checked (will be installed/kept).
+    pub checked: bool,
+    /// Whether this module was already installed before opening the picker.
+    pub was_installed: bool,
+}
+
+/// State for the in-TUI module install picker view.
+pub struct ModuleInstallState {
+    /// The source string the user provided (e.g. "github:user/repo").
+    pub source_str: String,
+    /// Discovered candidate modules from the source.
+    pub candidates: Vec<InstallCandidate>,
+    /// Cursor position in the candidate list.
+    pub cursor: usize,
+    /// Current phase of the install flow.
+    pub phase: InstallPhase,
+    /// Path to the cloned/local source directory (for cleanup).
+    pub source_dir: Option<PathBuf>,
+    /// Commit SHA from the cloned repo (None for local sources).
+    pub commit_sha: Option<String>,
+    /// Result messages after installation completes.
+    pub results: Vec<String>,
+    /// Path to the modules install directory.
+    pub modules_dir: PathBuf,
+}
+
+/// Messages sent from background install tasks to the event loop.
+pub enum InstallMessage {
+    /// Clone completed, modules discovered.
+    CloneComplete {
+        source_dir: PathBuf,
+        commit_sha: Option<String>,
+        candidates: Vec<(String, Module)>,
+        already_installed: Vec<bool>,
+    },
+    /// Clone or detection failed.
+    CloneFailed(String),
+    /// Installation of selected modules completed.
+    InstallComplete(Vec<String>),
+    /// Installation failed.
+    InstallFailed(String),
 }
 
 /// Tracks the state of a background cleanup operation for rendering.

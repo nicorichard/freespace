@@ -7,8 +7,9 @@ mod types;
 pub use drill::{DrillLevel, DrillState};
 pub use filter::{matches_filter, matches_structured_filter};
 pub use types::{
-    CleanupProgressState, FlashLevel, Item, ItemType, ModuleState, ModuleStatus,
-    ModuleUpdateStatus, ScanStatus, SiblingUpdatePrompt, View,
+    CleanupProgressState, FlashLevel, InstallCandidate, InstallMessage, InstallPhase, Item,
+    ItemType, ModuleInstallState, ModuleState, ModuleStatus, ModuleUpdateStatus, ScanStatus,
+    SiblingUpdatePrompt, View,
 };
 
 use std::collections::{BTreeSet, HashSet};
@@ -133,6 +134,12 @@ pub struct App {
     scan_cancel: Arc<AtomicBool>,
     /// Receiver for background module update check results.
     update_check_rx: Option<mpsc::UnboundedReceiver<(usize, ModuleUpdateStatus)>>,
+    /// State for the in-TUI module install picker (None when not active).
+    pub install_state: Option<ModuleInstallState>,
+    /// Receiver for background install task messages.
+    install_rx: Option<mpsc::UnboundedReceiver<InstallMessage>>,
+    /// Whether the app was launched in install-only mode (exits after install).
+    pub install_mode: bool,
 }
 
 /// Spawn background update checks for all git-sourced modules.
@@ -371,6 +378,374 @@ impl App {
             icons_enabled: config.icons.enabled,
             scan_cancel,
             update_check_rx,
+            install_state: None,
+            install_rx: None,
+            install_mode: false,
+        }
+    }
+
+    /// Create a new App in install-only mode: no scanning, just the install picker.
+    pub fn new_for_install(source_str: String, modules_dir: PathBuf) -> Self {
+        let config = AppConfig::load().unwrap_or_default();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let (disk_total, disk_free) = disk_stats().unzip();
+        let mut app = Self {
+            modules: Vec::new(),
+            current_view: View::ModuleInstall,
+            selected_index: 0,
+            selected_items: BTreeSet::new(),
+            scan_status: ScanStatus::Complete,
+            theme: Theme::default(),
+            previous_view: View::ModuleList,
+            should_quit: false,
+            filter_active: false,
+            filter_query: String::new(),
+            filter_cursor: 0,
+            filter_menu_open: false,
+            filter_menu_cursor: 0,
+            filter_risk: [true; 4],
+            filter_restore: [true; 2],
+            scan_rx: rx,
+            scan_tx: tx,
+            tick_count: 0,
+            info_confirm_remove: false,
+            info_confirm_update: None,
+            confirm_update_all: false,
+            pending_editor: None,
+            drill: DrillState::new(),
+            module_list_index: 0,
+            flat_view_index: 0,
+            browser_origin: View::ModuleList,
+            browser_module_idx: 0,
+            disk_total,
+            disk_free,
+            dry_run: false,
+            protected_paths: Vec::new(),
+            audit_log: false,
+            enforce_scope: config.enforce_scope,
+            flash_message: None,
+            flash_ticks: 0,
+            blocked_paths: Vec::new(),
+            seen_paths: HashSet::new(),
+            deduped_total: 0,
+            cleanup_rx: None,
+            cleanup_cancel: None,
+            cleanup_progress: None,
+            confirm_checked: BTreeSet::new(),
+            cleanup_action_dialog: false,
+            cleanup_action_cursor: 0,
+            view_offset: 0,
+            last_click: None,
+            version_hover: false,
+            icons_enabled: config.icons.enabled,
+            scan_cancel: Arc::new(AtomicBool::new(false)),
+            update_check_rx: None,
+            install_state: None,
+            install_rx: None,
+            install_mode: true,
+        };
+        app.start_module_install(source_str, modules_dir);
+        app
+    }
+
+    /// Begin an install flow: clone the source in the background and transition to the picker.
+    pub fn start_module_install(&mut self, source_str: String, modules_dir: PathBuf) {
+        use crate::module::installer;
+        use crate::module::source::SourceIdentifier;
+
+        self.install_state = Some(ModuleInstallState {
+            source_str: source_str.clone(),
+            candidates: Vec::new(),
+            cursor: 0,
+            phase: InstallPhase::Cloning,
+            source_dir: None,
+            commit_sha: None,
+            results: Vec::new(),
+            modules_dir: modules_dir.clone(),
+        });
+        self.set_view(View::ModuleInstall);
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.install_rx = Some(rx);
+
+        // Clone and discover in a background thread
+        tokio::task::spawn_blocking(move || {
+            let source = match SourceIdentifier::parse(&source_str) {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = tx.send(InstallMessage::CloneFailed(format!("{}", e)));
+                    return;
+                }
+            };
+
+            // Determine source dir and commit
+            let (source_dir, commit_sha) = match &source {
+                SourceIdentifier::Git { .. } => {
+                    if let Err(e) = installer::check_git_available() {
+                        let _ = tx.send(InstallMessage::CloneFailed(format!("{}", e)));
+                        return;
+                    }
+                    match installer::clone_repo(&source) {
+                        Ok((dir, sha)) => (dir, Some(sha)),
+                        Err(e) => {
+                            let _ = tx.send(InstallMessage::CloneFailed(format!("{}", e)));
+                            return;
+                        }
+                    }
+                }
+                SourceIdentifier::Local { path } => {
+                    let resolved = if path.is_absolute() {
+                        path.clone()
+                    } else {
+                        std::env::current_dir().unwrap_or_default().join(path)
+                    };
+                    if !resolved.exists() {
+                        let _ = tx.send(InstallMessage::CloneFailed(format!(
+                            "path not found: {}",
+                            resolved.display()
+                        )));
+                        return;
+                    }
+                    (resolved, None)
+                }
+            };
+
+            // Detect layout and discover modules
+            let modules = match installer::detect_layout(&source_dir) {
+                Ok(installer::RepoLayout::SingleModule { module }) => {
+                    let dir_name = source.default_dir_name();
+                    vec![(dir_name, *module)]
+                }
+                Ok(installer::RepoLayout::MultiModule { modules }) => modules,
+                Err(e) => {
+                    let _ = tx.send(InstallMessage::CloneFailed(format!("{}", e)));
+                    return;
+                }
+            };
+
+            // Check which modules are already installed
+            let already_installed: Vec<bool> = modules
+                .iter()
+                .map(|(dir_name, _)| modules_dir.join(dir_name).exists())
+                .collect();
+
+            let _ = tx.send(InstallMessage::CloneComplete {
+                source_dir,
+                commit_sha,
+                candidates: modules,
+                already_installed,
+            });
+        });
+    }
+
+    /// Drain pending install messages from the background task.
+    fn process_install_messages(&mut self) {
+        let mut rx = match self.install_rx.take() {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                InstallMessage::CloneComplete {
+                    source_dir,
+                    commit_sha,
+                    candidates,
+                    already_installed,
+                } => {
+                    if let Some(state) = &mut self.install_state {
+                        state.source_dir = Some(source_dir);
+                        state.commit_sha = commit_sha;
+                        state.candidates = candidates
+                            .into_iter()
+                            .zip(already_installed)
+                            .map(|((dir_name, module), installed)| InstallCandidate {
+                                dir_name,
+                                module,
+                                checked: installed, // pre-select installed modules
+                                was_installed: installed,
+                            })
+                            .collect();
+                        state.phase = InstallPhase::Picking;
+                    }
+                }
+                InstallMessage::CloneFailed(err) => {
+                    self.set_flash(format!("Install failed: {}", err), FlashLevel::Error);
+                    self.install_state = None;
+                    if self.install_mode {
+                        self.should_quit = true;
+                    } else {
+                        self.set_view(View::ModuleList);
+                    }
+                }
+                InstallMessage::InstallComplete(results) => {
+                    if let Some(state) = &mut self.install_state {
+                        state.results = results;
+                        state.phase = InstallPhase::Done;
+                    }
+                }
+                InstallMessage::InstallFailed(err) => {
+                    self.set_flash(format!("Install failed: {}", err), FlashLevel::Error);
+                    if let Some(state) = &mut self.install_state {
+                        state.phase = InstallPhase::Done;
+                    }
+                }
+            }
+        }
+
+        // Put rx back if still active
+        if self.install_state.is_some() {
+            self.install_rx = Some(rx);
+        }
+    }
+
+    /// Confirm the install picker selection: install new, update existing, remove unchecked.
+    pub fn confirm_module_install(&mut self) {
+        use crate::module::installer;
+        use crate::module::source::SourceIdentifier;
+
+        let state = match &mut self.install_state {
+            Some(s) => s,
+            None => return,
+        };
+        state.phase = InstallPhase::Installing;
+
+        let source_str = state.source_str.clone();
+        let source_dir = match &state.source_dir {
+            Some(d) => d.clone(),
+            None => return,
+        };
+        let commit_sha = state.commit_sha.clone();
+        let modules_dir = state.modules_dir.clone();
+
+        // Collect what to install, update, and remove
+        let mut to_install: Vec<(String, String)> = Vec::new(); // (dir_name, module_name)
+        let mut to_remove: Vec<String> = Vec::new();
+
+        for candidate in &state.candidates {
+            if candidate.checked {
+                to_install.push((candidate.dir_name.clone(), candidate.module.name.clone()));
+            } else if candidate.was_installed {
+                to_remove.push(candidate.dir_name.clone());
+            }
+        }
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.install_rx = Some(rx);
+
+        tokio::task::spawn_blocking(move || {
+            let source = match SourceIdentifier::parse(&source_str) {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = tx.send(InstallMessage::InstallFailed(format!("{}", e)));
+                    return;
+                }
+            };
+
+            let mut results = Vec::new();
+
+            // Remove unchecked modules that were previously installed
+            for dir_name in &to_remove {
+                let dest = modules_dir.join(dir_name);
+                if dest.exists() {
+                    match std::fs::remove_dir_all(&dest) {
+                        Ok(_) => results.push(format!("Removed {}", dir_name)),
+                        Err(e) => results.push(format!("Failed to remove {}: {}", dir_name, e)),
+                    }
+                }
+            }
+
+            // Install/update checked modules
+            for (dir_name, module_name) in &to_install {
+                let src = source_dir.join(dir_name);
+                let dest = modules_dir.join(dir_name);
+                let source_info = installer::make_source_info(&source, &commit_sha, Some(dir_name));
+
+                // Read the module manifest from source
+                let manifest_path = src.join("module.toml");
+                let module = match std::fs::read_to_string(&manifest_path)
+                    .ok()
+                    .and_then(|c| crate::module::manifest::Module::parse(&c).ok())
+                {
+                    Some(m) => m,
+                    None => {
+                        results.push(format!("Failed to read manifest for {}", module_name));
+                        continue;
+                    }
+                };
+
+                match installer::install_module_dir(&src, &dest, &source_info, &module) {
+                    Ok(r) => {
+                        let action = if r.was_upgrade {
+                            "Updated"
+                        } else {
+                            "Installed"
+                        };
+                        results.push(format!("{} {} v{}", action, r.name, r.version));
+                    }
+                    Err(e) => {
+                        results.push(format!("Failed to install {}: {}", module_name, e));
+                    }
+                }
+            }
+
+            // Clean up temp clone directory (best-effort)
+            if source_dir.starts_with(std::env::temp_dir()) {
+                let _ = std::fs::remove_dir_all(&source_dir);
+            }
+
+            let _ = tx.send(InstallMessage::InstallComplete(results));
+        });
+    }
+
+    /// Cancel the install flow and clean up.
+    pub fn cancel_module_install(&mut self) {
+        if let Some(state) = &self.install_state {
+            // Clean up temp directory
+            if let Some(ref source_dir) = state.source_dir {
+                if source_dir.starts_with(std::env::temp_dir()) {
+                    let _ = std::fs::remove_dir_all(source_dir);
+                }
+            }
+        }
+        self.install_state = None;
+        self.install_rx = None;
+        if self.install_mode {
+            self.should_quit = true;
+        } else {
+            self.set_view(View::ModuleList);
+        }
+    }
+
+    /// Finish install flow: transition back to module list or quit.
+    pub fn finish_module_install(&mut self) {
+        // If launched in normal mode (not install-only), reload modules and rescan
+        if !self.install_mode {
+            let (modules, search_dirs, config) =
+                Self::load_modules_and_config(Vec::new(), Vec::new(), false);
+            self.modules = modules;
+            self.protected_paths = safety::expand_protected_paths(&config.protected_paths);
+
+            // Start a new scan
+            let manifests: Vec<Module> = self.modules.iter().map(|ms| ms.module.clone()).collect();
+            if !manifests.is_empty() {
+                let cancel = scanner::start_scan(manifests, self.scan_tx.clone(), search_dirs);
+                self.scan_status = ScanStatus::Scanning;
+                self.scan_cancel = cancel;
+            }
+
+            // Restart update checks
+            self.update_check_rx = spawn_update_checks(&self.modules);
+        }
+
+        self.install_state = None;
+        self.install_rx = None;
+
+        if self.install_mode {
+            self.should_quit = true;
+        } else {
+            self.set_view(View::ModuleList);
+            self.selected_index = 0;
         }
     }
 
@@ -533,6 +908,9 @@ impl App {
 
             // Process background update check results (non-blocking)
             self.process_update_checks();
+
+            // Process background install messages (non-blocking)
+            self.process_install_messages();
 
             // Increment tick counter for spinner animation
             self.tick_count = self.tick_count.wrapping_add(1);
@@ -788,10 +1166,13 @@ impl App {
             return;
         }
 
-        // Global: q quits from any view (but not during filter input or cleanup progress)
+        // Global: q quits from any view (but not during filter input, cleanup progress, or install)
         if key == KeyCode::Char('q')
             && !self.filter_active
-            && !matches!(self.current_view, View::CleanupProgress)
+            && !matches!(
+                self.current_view,
+                View::CleanupProgress | View::ModuleInstall
+            )
         {
             self.should_quit = true;
             return;
@@ -802,7 +1183,11 @@ impl App {
             && !self.filter_active
             && !matches!(
                 self.current_view,
-                View::Help | View::Info(_) | View::CleanupProgress | View::CleanupConfirm
+                View::Help
+                    | View::Info(_)
+                    | View::CleanupProgress
+                    | View::CleanupConfirm
+                    | View::ModuleInstall
             )
         {
             self.filter_menu_open = true;
@@ -822,6 +1207,7 @@ impl App {
             }
             View::FlatView => views::flat_view::handle_key(self, key),
             View::FileBrowser => views::file_browser::handle_key(self, key),
+            View::ModuleInstall => views::module_install::handle_key(self, key),
         }
     }
 
@@ -899,6 +1285,7 @@ impl App {
             View::FlatView => views::flat_view::handle_click(self, col, row, area),
             View::FileBrowser => views::file_browser::handle_click(self, col, row, area),
             View::CleanupConfirm => views::cleanup_confirm::handle_click(self, col, row, area),
+            View::ModuleInstall => views::module_install::handle_click(self, col, row, area),
             _ => false,
         }
     }
@@ -1459,6 +1846,7 @@ impl App {
             View::Info(idx) => views::info::render(self, frame, idx),
             View::FlatView => views::flat_view::render(self, frame),
             View::FileBrowser => views::file_browser::render(self, frame),
+            View::ModuleInstall => views::module_install::render(self, frame),
         }
 
         // Overlay: cleanup action choice dialog
@@ -1527,6 +1915,9 @@ impl App {
             icons_enabled: true,
             scan_cancel: Arc::new(AtomicBool::new(false)),
             update_check_rx: None,
+            install_state: None,
+            install_rx: None,
+            install_mode: false,
         }
     }
 }
@@ -1834,6 +2225,22 @@ mod tests {
         assert!(matches!(app.current_view, View::ModuleList));
         // Cancel preserves selection
         assert_eq!(app.selected_items.len(), selected_count);
+    }
+
+    #[test]
+    fn cleanup_action_dialog_q_dismisses() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Char('c'), KeyModifiers::NONE);
+        assert!(matches!(app.current_view, View::CleanupConfirm));
+        // Open the action dialog via Enter
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.cleanup_action_dialog);
+        // q should dismiss the dialog, NOT quit the app
+        app.handle_key(KeyCode::Char('q'), KeyModifiers::NONE);
+        assert!(!app.cleanup_action_dialog);
+        assert!(!app.should_quit);
+        assert!(matches!(app.current_view, View::CleanupConfirm));
     }
 
     // --- Detail view selection ---
