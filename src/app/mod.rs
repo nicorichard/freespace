@@ -116,6 +116,10 @@ pub struct App {
     pub cleanup_progress: Option<CleanupProgressState>,
     /// Items checked for cleanup in the confirmation view (subset of selected_items).
     pub confirm_checked: BTreeSet<PathBuf>,
+    /// Whether the cleanup action choice dialog (trash/delete) is open.
+    pub cleanup_action_dialog: bool,
+    /// Cursor position in the action dialog (0 = trash, 1 = delete).
+    pub cleanup_action_cursor: usize,
     /// Persistent scroll offset for table views.
     pub view_offset: usize,
     /// Last left-click position and time, for double-click detection.
@@ -359,6 +363,8 @@ impl App {
             cleanup_cancel: None,
             cleanup_progress: None,
             confirm_checked: BTreeSet::new(),
+            cleanup_action_dialog: false,
+            cleanup_action_cursor: 0,
             view_offset: 0,
             last_click: None,
             version_hover: false,
@@ -750,6 +756,35 @@ impl App {
         // If filter menu is open, handle its keys
         if self.filter_menu_open {
             self.handle_key_filter_menu(key);
+            return;
+        }
+
+        // If cleanup action dialog is open, handle its keys
+        if self.cleanup_action_dialog {
+            match key {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.cleanup_action_cursor = 1;
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.cleanup_action_cursor = 0;
+                }
+                KeyCode::Char('t') => {
+                    self.cleanup_action_dialog = false;
+                    self.start_cleanup(false);
+                }
+                KeyCode::Char('d') => {
+                    self.cleanup_action_dialog = false;
+                    self.start_cleanup(true);
+                }
+                KeyCode::Enter => {
+                    self.cleanup_action_dialog = false;
+                    self.start_cleanup(self.cleanup_action_cursor == 1);
+                }
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.cleanup_action_dialog = false;
+                }
+                _ => {}
+            }
             return;
         }
 
@@ -1426,6 +1461,11 @@ impl App {
             View::FileBrowser => views::file_browser::render(self, frame),
         }
 
+        // Overlay: cleanup action choice dialog
+        if self.cleanup_action_dialog {
+            views::cleanup_confirm::render_action_dialog(self, frame);
+        }
+
         // Overlay: filter menu popup
         if self.filter_menu_open {
             views::filter_menu::render(self, frame);
@@ -1479,6 +1519,8 @@ impl App {
             cleanup_cancel: None,
             cleanup_progress: None,
             confirm_checked: BTreeSet::new(),
+            cleanup_action_dialog: false,
+            cleanup_action_cursor: 0,
             view_offset: 0,
             last_click: None,
             version_hover: false,
@@ -1769,13 +1811,26 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_n_cancels() {
+    fn cleanup_n_deselects_all() {
+        let mut app = make_test_app();
+        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Char('c'), KeyModifiers::NONE);
+        assert!(matches!(app.current_view, View::CleanupConfirm));
+        assert!(!app.confirm_checked.is_empty());
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE);
+        assert!(app.confirm_checked.is_empty());
+        // Still on the confirm view
+        assert!(matches!(app.current_view, View::CleanupConfirm));
+    }
+
+    #[test]
+    fn cleanup_esc_cancels() {
         let mut app = make_test_app();
         app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
         let selected_count = app.selected_items.len();
         app.handle_key(KeyCode::Char('c'), KeyModifiers::NONE);
         assert!(matches!(app.current_view, View::CleanupConfirm));
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
         assert!(matches!(app.current_view, View::ModuleList));
         // Cancel preserves selection
         assert_eq!(app.selected_items.len(), selected_count);

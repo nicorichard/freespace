@@ -91,6 +91,10 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
                 app.confirm_checked = app.selected_items.clone();
             }
         }
+        // Deselect all
+        KeyCode::Char('n') => {
+            app.confirm_checked.clear();
+        }
         // Move to trash (reversible)
         KeyCode::Char('t') => {
             if !app.confirm_checked.is_empty() {
@@ -103,12 +107,12 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
                 app.start_cleanup(true);
             }
         }
-        // Cancel and return to previous view
-        KeyCode::Char('n') => {
-            app.clear_filter();
-            app.confirm_checked.clear();
-            app.set_view(app.previous_view);
-            app.selected_index = 0;
+        // Enter: open trash/delete choice dialog
+        KeyCode::Enter => {
+            if !app.confirm_checked.is_empty() {
+                app.cleanup_action_dialog = true;
+                app.cleanup_action_cursor = 0;
+            }
         }
         // Esc: clear filter first, then close dialog
         KeyCode::Esc => {
@@ -116,10 +120,16 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
                 app.clear_filter();
                 app.selected_index = 0;
             } else {
+                app.clear_filter();
                 app.confirm_checked.clear();
                 app.set_view(app.previous_view);
                 app.selected_index = 0;
             }
+        }
+        // Toggle help overlay
+        KeyCode::Char('?') => {
+            app.previous_view = app.current_view;
+            app.set_view(crate::app::View::Help);
         }
         // Enter filter mode
         KeyCode::Char('/') => {
@@ -537,6 +547,51 @@ fn render_action_bar(app: &mut App, frame: &mut Frame, area: Rect, shown: usize,
         crate::tui::keybindings::CLEANUP_CONFIRM,
         app.version_hover,
     );
+}
+
+/// Render the centered trash/delete choice dialog overlay.
+pub fn render_action_dialog(app: &App, frame: &mut Frame) {
+    use ratatui::widgets::Clear;
+
+    let area = frame.area();
+    let width = 30u16.min(area.width);
+    let height = 6u16.min(area.height);
+    let x = (area.width.saturating_sub(width)) / 2;
+    let y = (area.height.saturating_sub(height)) / 2;
+    let popup_area = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(" Action ")
+        .borders(Borders::ALL)
+        .border_style(app.theme.style_border());
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let options = [
+        ("[t]rash", "Move to trash"),
+        ("[d]elete", "Permanently delete"),
+    ];
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, (label, _desc)) in options.iter().enumerate() {
+        let selected = app.cleanup_action_cursor == i;
+        let prefix = if selected { " \u{25b8} " } else { "   " };
+        let style = if selected {
+            app.theme.style_selected()
+        } else {
+            app.theme.style_normal()
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{}{}", prefix, label),
+            style,
+        )));
+    }
+
+    let content = Paragraph::new(lines).style(app.theme.style_normal());
+    frame.render_widget(content, inner);
 }
 
 #[cfg(test)]

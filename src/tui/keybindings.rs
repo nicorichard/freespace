@@ -40,6 +40,14 @@ fn clean_appearance(app: &App) -> HotkeyAppearance {
     }
 }
 
+fn confirm_action_appearance(app: &App) -> HotkeyAppearance {
+    if app.confirm_checked.is_empty() {
+        HotkeyAppearance::Dimmed
+    } else {
+        HotkeyAppearance::Highlighted
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helper macro to reduce per-entry boilerplate
 // ---------------------------------------------------------------------------
@@ -152,11 +160,26 @@ pub const FILE_BROWSER: &[HotkeyDef] = &[
 
 pub const CLEANUP_CONFIRM: &[HotkeyDef] = &[
     hk("␣", "toggle", "Toggle item check"),
-    hk("a", "all", "Toggle all checks"),
-    hk("t", "trash", "Move to trash"),
-    hk("d", "delete", "Permanently delete"),
-    hk("n", "cancel", "Cancel and go back"),
+    hk("a", "all", "Select all items"),
+    hk("n", "none", "Deselect all items"),
+    HotkeyDef {
+        key: "t",
+        label: "trash",
+        desc: "Move to trash",
+        bar: true,
+        style: Some(confirm_action_appearance),
+    },
+    HotkeyDef {
+        key: "d",
+        label: "delete",
+        desc: "Permanently delete",
+        bar: true,
+        style: Some(confirm_action_appearance),
+    },
+    hk_help("↵", "action", "Choose trash or delete"),
+    hk("esc", "cancel", "Cancel and go back"),
     hk("/", "search", "Search list"),
+    hk("?", "help", "Toggle help overlay"),
 ];
 
 // ---------------------------------------------------------------------------
