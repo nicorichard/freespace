@@ -2,6 +2,9 @@
 
 use std::path::PathBuf;
 
+/// Default community modules source for first-run installation.
+pub const COMMUNITY_MODULES_SOURCE: &str = "github:nicorichard/freespace-modules";
+
 use serde::{Deserialize, Serialize};
 
 /// Errors that can occur when loading the config file.

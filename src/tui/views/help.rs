@@ -53,6 +53,7 @@ fn context_for_view(view: View) -> (&'static str, &'static [HotkeyDef]) {
         View::FileBrowser => ("File Browser", keybindings::FILE_BROWSER),
         View::CleanupConfirm => ("Cleanup Confirm", keybindings::CLEANUP_CONFIRM),
         View::CleanupProgress => ("Cleanup", keybindings::CLEANUP_PROGRESS_ACTIVE),
+        View::ModuleInstall => ("Install Modules", keybindings::MODULE_INSTALL),
         // Fallback for overlays that shouldn't normally open help
         _ => ("Module List", keybindings::MODULE_LIST),
     }

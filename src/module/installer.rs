@@ -39,7 +39,7 @@ pub struct InstallResult {
 }
 
 /// Layout of a source directory.
-pub(crate) enum RepoLayout {
+pub enum RepoLayout {
     /// module.toml at the root
     SingleModule { module: Box<Module> },
     /// Subdirectories each containing module.toml
@@ -267,7 +267,7 @@ fn prompt_module_selection(modules: &[(String, Module)]) -> Result<Vec<usize>, I
 }
 
 /// Check that git is available on the system.
-fn check_git_available() -> Result<(), InstallError> {
+pub(crate) fn check_git_available() -> Result<(), InstallError> {
     Command::new("git")
         .arg("--version")
         .output()
@@ -278,7 +278,7 @@ fn check_git_available() -> Result<(), InstallError> {
 /// Clone a repository to a temporary directory. Returns (temp_dir_path, commit_sha).
 ///
 /// Tries each URL from `clone_urls()` in order (HTTPS first, SSH fallback).
-fn clone_repo(source: &SourceIdentifier) -> Result<(PathBuf, String), InstallError> {
+pub(crate) fn clone_repo(source: &SourceIdentifier) -> Result<(PathBuf, String), InstallError> {
     let urls = source.clone_urls();
     if urls.is_empty() {
         return Err(InstallError::CloneFailed("not a GitHub source".to_string()));
@@ -470,7 +470,7 @@ pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> 
 }
 
 /// Build a SourceInfo from a source identifier and optional commit metadata.
-fn make_source_info(
+pub(crate) fn make_source_info(
     source: &SourceIdentifier,
     commit_sha: &Option<String>,
     path: Option<&str>,

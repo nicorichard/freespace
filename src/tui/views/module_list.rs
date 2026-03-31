@@ -37,6 +37,18 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
         return;
     }
 
+    // When no modules are installed, [i] triggers community module install
+    if app.modules.is_empty() && key == KeyCode::Char('i') {
+        if let Some(modules_dir) = crate::config::default_modules_dir() {
+            let _ = std::fs::create_dir_all(&modules_dir);
+            app.start_module_install(
+                crate::config::COMMUNITY_MODULES_SOURCE.to_string(),
+                modules_dir,
+            );
+        }
+        return;
+    }
+
     let sorted = sorted_module_indices(app);
     let count = sorted.len();
 
@@ -459,13 +471,31 @@ fn render_title_bar(app: &mut App, frame: &mut Frame, area: Rect) {
 
 fn render_module_table(app: &mut App, frame: &mut Frame, area: Rect) {
     if app.modules.is_empty() {
-        let content = Paragraph::new("No modules loaded.")
-            .style(app.theme.style_normal())
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(app.theme.style_border()),
-            );
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  No modules installed.",
+                app.theme.style_normal(),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Press ", app.theme.style_description()),
+                Span::styled("[i]", app.theme.style_size()),
+                Span::styled(
+                    " to install community modules",
+                    app.theme.style_description(),
+                ),
+            ]),
+            Line::from(Span::styled(
+                "  or run: freespace module install <source>",
+                app.theme.style_description(),
+            )),
+        ];
+        let content = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(app.theme.style_border()),
+        );
         frame.render_widget(content, area);
         return;
     }

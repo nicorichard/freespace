@@ -183,7 +183,7 @@ pub const CLEANUP_CONFIRM: &[HotkeyDef] = &[
 ];
 
 // ---------------------------------------------------------------------------
-// Install select
+// Install select (standalone mini-TUI — legacy)
 // ---------------------------------------------------------------------------
 
 pub const INSTALL_SELECT: &[HotkeyDef] = &[
@@ -192,6 +192,20 @@ pub const INSTALL_SELECT: &[HotkeyDef] = &[
     hk("n", "none", "Deselect all"),
     hk("enter", "confirm", "Confirm selection"),
     hk("esc", "cancel", "Cancel"),
+];
+
+// ---------------------------------------------------------------------------
+// Module install picker (integrated TUI view)
+// ---------------------------------------------------------------------------
+
+pub const MODULE_INSTALL: &[HotkeyDef] = &[
+    hk("␣", "toggle", "Toggle module selection"),
+    hk("a", "all", "Select all modules"),
+    hk("n", "none", "Deselect all modules"),
+    hk("/", "search", "Search modules"),
+    hk_help("↵", "confirm", "Confirm and install"),
+    hk("esc", "back", "Cancel"),
+    hk("?", "help", "Toggle help overlay"),
 ];
 
 // ---------------------------------------------------------------------------
