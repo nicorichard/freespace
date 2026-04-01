@@ -727,6 +727,7 @@ mod tests {
                 restore: crate::module::manifest::RestoreKind::default(),
                 restore_steps: None,
                 risk: crate::module::manifest::RiskLevel::default(),
+                ignore: vec![],
             }],
         };
         let ms = ModuleState {
@@ -743,6 +744,7 @@ mod tests {
                     restore_kind: crate::module::manifest::RestoreKind::default(),
                     restore_steps: None,
                     risk_level: crate::module::manifest::RiskLevel::default(),
+                    ignore_patterns: vec![],
                 },
                 Item {
                     name: "small-file".to_string(),
@@ -755,6 +757,7 @@ mod tests {
                     restore_kind: crate::module::manifest::RestoreKind::default(),
                     restore_steps: None,
                     risk_level: crate::module::manifest::RiskLevel::default(),
+                    ignore_patterns: vec![],
                 },
             ],
             total_size: Some(5_000_001_000),

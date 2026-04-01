@@ -24,6 +24,7 @@ fn make_global_module(name: &str, path: &str) -> Module {
             restore: freespace::module::manifest::RestoreKind::default(),
             restore_steps: None,
             risk: freespace::module::manifest::RiskLevel::default(),
+            ignore: vec![],
         }],
     }
 }
@@ -45,6 +46,7 @@ fn make_local_module(name: &str, dir_name: &str) -> Module {
             restore: freespace::module::manifest::RestoreKind::default(),
             restore_steps: None,
             risk: freespace::module::manifest::RiskLevel::default(),
+            ignore: vec![],
         }],
     }
 }

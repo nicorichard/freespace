@@ -51,6 +51,7 @@ Every module must have a `module.toml` at the root of its directory. All top-lev
 | `targets.restore` | String | No | How contents are restored: `"auto"` (default) or `"manual"` |
 | `targets.restore_steps` | String | No | Human-readable recovery instructions (e.g. `"Run npm install"`) |
 | `targets.risk` | String | No | Impact of deletion: `"safe"` (default), `"low"`, `"medium"`, `"high"` |
+| `targets.ignore` | String or array | No | Glob patterns for files/directories to preserve within this target |
 
 Modules with a `platforms` list that doesn't include the current OS are silently skipped.
 
@@ -115,6 +116,30 @@ risk = "safe"
 These fields are independent. For example, `node_modules` is `restore = "manual"` (needs a command) but `risk = "safe"` (no data loss). A downloads folder might be `restore = "auto"` but `risk = "medium"` (could contain files worth keeping).
 
 All three fields are optional and default to `restore = "auto"`, `risk = "safe"`.
+
+## Ignore Patterns
+
+Targets can declare files or directories to preserve when cleaning, using the `ignore` field. This accepts a single glob or a list of globs, matched against the names of top-level entries in the target directory.
+
+```toml
+[[targets]]
+path = "~/Library/Developer/CoreSimulator/Devices"
+description = "iOS simulator device images"
+ignore = "device_set.plist"
+risk = "medium"
+```
+
+Multiple patterns:
+
+```toml
+[[targets]]
+path = "~/.docker/buildx"
+ignore = ["config.json", "*.lock"]
+```
+
+When `ignore` is set, freespace deletes (or trashes) the directory's children individually, skipping any that match an ignore pattern. The directory itself and ignored entries are left intact. Size calculations also exclude ignored entries.
+
+Patterns must be relative (no leading `/`) and must not contain directory traversal (`..`). Standard glob syntax is supported (`*`, `?`, `[...]`).
 
 ## Local Targets
 

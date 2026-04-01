@@ -457,6 +457,7 @@ mod tests {
                 restore: crate::module::manifest::RestoreKind::default(),
                 restore_steps: None,
                 risk: crate::module::manifest::RiskLevel::default(),
+                ignore: vec![],
             }],
         };
         let items: Vec<Item> = items
@@ -472,6 +473,7 @@ mod tests {
                 restore_kind: crate::module::manifest::RestoreKind::default(),
                 restore_steps: None,
                 risk_level: crate::module::manifest::RiskLevel::default(),
+                ignore_patterns: vec![],
             })
             .collect();
         let total: u64 = items.iter().filter_map(|i| i.size).sum();

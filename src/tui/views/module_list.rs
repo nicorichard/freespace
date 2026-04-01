@@ -727,6 +727,7 @@ mod tests {
                 restore: crate::module::manifest::RestoreKind::default(),
                 restore_steps: None,
                 risk: crate::module::manifest::RiskLevel::default(),
+                ignore: vec![],
             }],
         };
         ModuleState {
@@ -742,6 +743,7 @@ mod tests {
                 restore_kind: crate::module::manifest::RestoreKind::default(),
                 restore_steps: None,
                 risk_level: crate::module::manifest::RiskLevel::default(),
+                ignore_patterns: vec![],
             }],
             total_size: Some(size),
             status: ModuleStatus::Ready,
@@ -769,6 +771,7 @@ mod tests {
                     restore: crate::module::manifest::RestoreKind::default(),
                     restore_steps: None,
                     risk: crate::module::manifest::RiskLevel::default(),
+                    ignore: vec![],
                 }],
             },
             items: vec![],

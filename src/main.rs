@@ -87,6 +87,12 @@ enum ModuleCommand {
     },
     /// Check for available updates without applying them
     Outdated,
+    /// Validate module manifests from a source
+    Validate {
+        /// Source: owner/repo, git URL, or local path (default: current directory)
+        #[arg(default_value = ".")]
+        source: String,
+    },
 }
 
 #[tokio::main]
@@ -177,6 +183,12 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         Some(Command::Module { command }) => {
+            // Validate doesn't need the installed modules directory
+            if let ModuleCommand::Validate { source } = command {
+                cmd_validate(&source)?;
+                return Ok(());
+            }
+
             let modules_dir = config::default_modules_dir()
                 .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
             fs::create_dir_all(&modules_dir)?;
@@ -204,6 +216,7 @@ async fn main() -> anyhow::Result<()> {
                 ModuleCommand::Outdated => {
                     cmd_outdated(&modules_dir);
                 }
+                ModuleCommand::Validate { .. } => unreachable!(),
             }
         }
     }
@@ -459,6 +472,107 @@ fn cmd_outdated(modules_dir: &std::path::Path) {
     } else {
         println!("\nAll modules are up to date.");
     }
+}
+
+/// Validate module manifests from a source (local path or git repo).
+fn cmd_validate(source_str: &str) -> anyhow::Result<()> {
+    let source = module::source::SourceIdentifier::parse(source_str)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let (source_dir, _temp_dir) = match &source {
+        module::source::SourceIdentifier::Git { .. } => {
+            module::installer::check_git_available().map_err(|e| anyhow::anyhow!("{}", e))?;
+            let (dir, _commit) =
+                module::installer::clone_repo(&source).map_err(|e| anyhow::anyhow!("{}", e))?;
+            // Keep the PathBuf around so the temp dir isn't dropped
+            (dir.clone(), Some(dir))
+        }
+        module::source::SourceIdentifier::Local { path } => {
+            let resolved = if path.starts_with("~") {
+                if let Some(home) = dirs::home_dir() {
+                    home.join(path.strip_prefix("~").unwrap())
+                } else {
+                    path.clone()
+                }
+            } else {
+                path.clone()
+            };
+            let resolved = if resolved.is_relative() {
+                std::env::current_dir()?.join(&resolved)
+            } else {
+                resolved
+            };
+            if !resolved.exists() {
+                anyhow::bail!("path does not exist: {}", resolved.display());
+            }
+            (resolved, None)
+        }
+    };
+
+    let results = module::installer::validate_all(&source_dir);
+
+    if results.is_empty() {
+        eprintln!("No modules found in {}", source_str);
+        std::process::exit(1);
+    }
+
+    println!("Validating {} module(s)...", results.len());
+
+    let mut passed = 0u32;
+    let mut failed = 0u32;
+    let mut ids_seen = std::collections::HashMap::new();
+    let mut warnings = Vec::new();
+
+    for result in &results {
+        match &result.result {
+            Ok(m) => {
+                println!("  \u{2713} {}", m.id);
+                passed += 1;
+
+                // Track duplicate IDs
+                if let Some(prev_dir) = ids_seen.insert(m.id.clone(), result.dir_name.clone()) {
+                    warnings.push(format!(
+                        "duplicate id '{}' in directories '{}' and '{}'",
+                        m.id, prev_dir, result.dir_name
+                    ));
+                    failed += 1;
+                }
+
+                // Warn if directory name doesn't match module id (multi-module only)
+                if result.dir_name != "." && result.dir_name != m.id {
+                    warnings.push(format!(
+                        "directory '{}' does not match module id '{}'",
+                        result.dir_name, m.id
+                    ));
+                }
+            }
+            Err(e) => {
+                println!("  \u{2717} {}: {}", result.dir_name, e);
+                failed += 1;
+            }
+        }
+    }
+
+    if !warnings.is_empty() {
+        println!();
+        for w in &warnings {
+            println!("  warning: {}", w);
+        }
+    }
+
+    println!();
+    println!("Results: {} passed, {} failed", passed, failed);
+
+    // Clean up temp dir for git sources
+    if let Some(temp) = _temp_dir {
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    if failed > 0 {
+        std::process::exit(1);
+    }
+
+    Ok(())
 }
 
 /// Collect module directories, optionally filtered by id.

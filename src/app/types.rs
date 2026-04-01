@@ -97,6 +97,8 @@ pub struct Item {
     pub restore_steps: Option<String>,
     /// Potential impact of deleting this item's contents.
     pub risk_level: crate::module::manifest::RiskLevel,
+    /// Glob patterns for files/directories to preserve when cleaning this item.
+    pub ignore_patterns: Vec<String>,
 }
 
 /// The type of a discovered filesystem item.

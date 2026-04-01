@@ -1,7 +1,8 @@
 // Module manifest (TOML) parsing and data types.
 
 use anyhow::{bail, Result};
-use serde::{de, Deserialize, Deserializer};
+use serde::de;
+use serde::{Deserialize, Deserializer};
 
 use crate::core::safety;
 
@@ -119,7 +120,9 @@ struct RawModule {
 /// Intermediate target struct for TOML deserialization.
 #[derive(Debug, Deserialize)]
 struct RawTarget {
-    path: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_or_vec")]
+    path: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_or_vec")]
     paths: Option<Vec<String>>,
     description: Option<String>,
     #[serde(default)]
@@ -127,6 +130,47 @@ struct RawTarget {
     restore_steps: Option<String>,
     #[serde(default)]
     risk: RiskLevel,
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    ignore: Vec<String>,
+}
+
+/// Deserialize a field that accepts either a single string or an array of strings.
+fn deserialize_string_or_vec<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct StringOrVec;
+
+    impl<'de> de::Visitor<'de> for StringOrVec {
+        type Value = Vec<String>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a string or list of strings")
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Vec<String>, E> {
+            Ok(vec![v.to_string()])
+        }
+
+        fn visit_seq<A: de::SeqAccess<'de>>(
+            self,
+            seq: A,
+        ) -> std::result::Result<Vec<String>, A::Error> {
+            Vec::deserialize(de::value::SeqAccessDeserializer::new(seq))
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVec)
+}
+
+/// Deserialize an optional field that accepts either a single string or an array of strings.
+fn deserialize_optional_string_or_vec<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_string_or_vec(deserializer).map(Some)
 }
 
 impl Module {
@@ -143,13 +187,8 @@ impl Module {
         let mut targets = Vec::with_capacity(raw.targets.len());
         for raw_target in raw.targets {
             let paths = match (raw_target.path, raw_target.paths) {
-                (Some(p), None) => vec![p],
-                (None, Some(ps)) => {
-                    if ps.is_empty() {
-                        bail!("target paths array must not be empty");
-                    }
-                    ps
-                }
+                (Some(p), None) => p,
+                (None, Some(ps)) => ps,
                 (Some(_), Some(_)) => {
                     bail!("target must specify either 'path' or 'paths', not both");
                 }
@@ -157,9 +196,16 @@ impl Module {
                     bail!("target must specify either 'path' or 'paths'");
                 }
             };
+            if paths.is_empty() {
+                bail!("target paths must not be empty");
+            }
 
             for p in &paths {
                 safety::validate_target_pattern(p)?;
+            }
+
+            for pattern in &raw_target.ignore {
+                validate_ignore_pattern(pattern)?;
             }
 
             targets.push(Target {
@@ -168,6 +214,7 @@ impl Module {
                 restore: raw_target.restore,
                 restore_steps: raw_target.restore_steps,
                 risk: raw_target.risk,
+                ignore: raw_target.ignore,
             });
         }
 
@@ -223,6 +270,30 @@ fn validate_icon(icon: &str) -> Result<()> {
     }
 }
 
+/// Validate that an ignore pattern is a relative glob (no `..` or absolute paths).
+fn validate_ignore_pattern(pattern: &str) -> Result<()> {
+    if pattern.is_empty() {
+        bail!("ignore pattern must not be empty");
+    }
+    if pattern.starts_with('/') {
+        bail!(
+            "ignore pattern '{}' must be relative, not absolute",
+            pattern
+        );
+    }
+    if pattern.contains("..") {
+        bail!(
+            "ignore pattern '{}' must not contain directory traversal (..)",
+            pattern
+        );
+    }
+    // Verify it's a valid glob pattern
+    if glob::Pattern::new(pattern).is_err() {
+        bail!("ignore pattern '{}' is not a valid glob pattern", pattern);
+    }
+    Ok(())
+}
+
 /// Validate that a module id is kebab-case: `^[a-z0-9]+(-[a-z0-9]+)*$`.
 fn validate_id(id: &str) -> Result<()> {
     if id.is_empty() {
@@ -254,6 +325,8 @@ pub struct Target {
     pub restore: RestoreKind,
     pub restore_steps: Option<String>,
     pub risk: RiskLevel,
+    /// Glob patterns for files/directories to preserve when cleaning this target.
+    pub ignore: Vec<String>,
 }
 
 #[cfg(test)]
@@ -542,6 +615,43 @@ mod tests {
         assert_eq!(module.targets[0].paths[0], "~/Library/Caches/a");
         assert_eq!(module.targets[0].paths[1], "~/Library/Caches/b");
         assert_eq!(module.targets[0].paths[2], "~/Library/Caches/c");
+    }
+
+    #[test]
+    fn parse_path_accepts_list() {
+        let toml_str = r#"
+        id = "path-list"
+        name = "path-list"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+
+        [[targets]]
+        path = ["~/Library/Caches/foo", "~/Library/Caches/bar"]
+        "#;
+        let module = Module::parse(toml_str).unwrap();
+        assert_eq!(
+            module.targets[0].paths,
+            vec!["~/Library/Caches/foo", "~/Library/Caches/bar"]
+        );
+    }
+
+    #[test]
+    fn parse_paths_accepts_single_string() {
+        let toml_str = r#"
+        id = "paths-str"
+        name = "paths-str"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+
+        [[targets]]
+        paths = "~/Library/Caches/foo"
+        "#;
+        let module = Module::parse(toml_str).unwrap();
+        assert_eq!(module.targets[0].paths, vec!["~/Library/Caches/foo"]);
     }
 
     #[test]
@@ -859,6 +969,104 @@ mod tests {
         "#;
         let err = Module::parse(toml_str).unwrap_err();
         assert!(err.to_string().contains("unknown risk level"));
+    }
+
+    // --- ignore tests ---
+
+    #[test]
+    fn parse_ignore_single_string() {
+        let toml_str = r#"
+        id = "ign"
+        name = "ign"
+        version = "1.0.0"
+        description = "t"
+        author = "t"
+        platforms = ["macos"]
+
+        [[targets]]
+        path = "~/tmp"
+        ignore = "config.json"
+        "#;
+        let module = Module::parse(toml_str).unwrap();
+        assert_eq!(module.targets[0].ignore, vec!["config.json"]);
+    }
+
+    #[test]
+    fn parse_ignore_list() {
+        let toml_str = r#"
+        id = "ign"
+        name = "ign"
+        version = "1.0.0"
+        description = "t"
+        author = "t"
+        platforms = ["macos"]
+
+        [[targets]]
+        path = "~/tmp"
+        ignore = ["config.json", "*.lock"]
+        "#;
+        let module = Module::parse(toml_str).unwrap();
+        assert_eq!(module.targets[0].ignore, vec!["config.json", "*.lock"]);
+    }
+
+    #[test]
+    fn parse_ignore_omitted_defaults_empty() {
+        let module = Module::parse(valid_global_toml()).unwrap();
+        assert!(module.targets[0].ignore.is_empty());
+    }
+
+    #[test]
+    fn parse_ignore_rejects_absolute_path() {
+        let toml_str = r#"
+        id = "ign"
+        name = "ign"
+        version = "1.0.0"
+        description = "t"
+        author = "t"
+        platforms = ["macos"]
+
+        [[targets]]
+        path = "~/tmp"
+        ignore = "/etc/passwd"
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains("relative"));
+    }
+
+    #[test]
+    fn parse_ignore_rejects_traversal() {
+        let toml_str = r#"
+        id = "ign"
+        name = "ign"
+        version = "1.0.0"
+        description = "t"
+        author = "t"
+        platforms = ["macos"]
+
+        [[targets]]
+        path = "~/tmp"
+        ignore = "../secret"
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains(".."));
+    }
+
+    #[test]
+    fn parse_ignore_rejects_empty_string() {
+        let toml_str = r#"
+        id = "ign"
+        name = "ign"
+        version = "1.0.0"
+        description = "t"
+        author = "t"
+        platforms = ["macos"]
+
+        [[targets]]
+        path = "~/tmp"
+        ignore = ""
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains("empty"));
     }
 
     #[test]

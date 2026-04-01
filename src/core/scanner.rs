@@ -102,6 +102,48 @@ pub fn calculate_size_cancellable(path: &Path, cancel: Option<&AtomicBool>) -> u
     }
 }
 
+/// Calculate size of a directory, excluding entries matching ignore patterns.
+/// Patterns are matched against filenames of top-level entries in the directory.
+pub fn calculate_size_with_ignore(
+    path: &Path,
+    ignore_patterns: &[String],
+    cancel: Option<&AtomicBool>,
+) -> u64 {
+    if !path.is_dir() {
+        return calculate_size_cancellable(path, cancel);
+    }
+
+    let compiled: Vec<glob::Pattern> = ignore_patterns
+        .iter()
+        .filter_map(|p| glob::Pattern::new(p).ok())
+        .collect();
+
+    let mut total = 0u64;
+    for entry in walkdir::WalkDir::new(path)
+        .into_iter()
+        .filter_entry(|e| {
+            // Skip top-level entries that match an ignore pattern
+            if e.depth() == 1 {
+                let name = e.file_name().to_string_lossy();
+                !compiled.iter().any(|p| p.matches(&name))
+            } else {
+                true
+            }
+        })
+        .filter_map(|e| e.ok())
+    {
+        if let Some(c) = cancel {
+            if c.load(Ordering::Relaxed) {
+                return total;
+            }
+        }
+        if entry.file_type().is_file() {
+            total += entry.metadata().map(|m| file_disk_size(&m)).unwrap_or(0);
+        }
+    }
+    total
+}
+
 /// Discover local directories matching `dir_name` under the given search roots.
 pub(crate) fn discover_local_dirs(dir_name: &str, search_roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut results = Vec::new();
@@ -150,7 +192,7 @@ fn scan_module(
 ) {
     // Phase 1: Discover all items (fast — no size calculation)
     let mut item_index = 0usize;
-    let mut paths_to_size: Vec<(usize, PathBuf)> = Vec::new();
+    let mut paths_to_size: Vec<(usize, PathBuf, Vec<String>)> = Vec::new();
 
     for target in &module.targets {
         for path_pattern in &target.paths {
@@ -171,6 +213,7 @@ fn scan_module(
                         restore_kind: target.restore,
                         restore_steps: target.restore_steps.clone(),
                         risk_level: target.risk,
+                        ignore_patterns: target.ignore.clone(),
                     };
 
                     if tx
@@ -180,7 +223,7 @@ fn scan_module(
                         return;
                     }
 
-                    paths_to_size.push((item_index, path));
+                    paths_to_size.push((item_index, path, target.ignore.clone()));
                     item_index += 1;
                 }
             } else {
@@ -218,6 +261,7 @@ fn scan_module(
                         restore_kind: target.restore,
                         restore_steps: target.restore_steps.clone(),
                         risk_level: target.risk,
+                        ignore_patterns: target.ignore.clone(),
                     };
 
                     if tx
@@ -227,7 +271,7 @@ fn scan_module(
                         return;
                     }
 
-                    paths_to_size.push((item_index, path));
+                    paths_to_size.push((item_index, path, target.ignore.clone()));
                     item_index += 1;
                 }
             }
@@ -235,11 +279,15 @@ fn scan_module(
     }
 
     // Phase 2: Calculate sizes and send ItemSized messages
-    for (idx, path) in paths_to_size {
+    for (idx, path, ignore) in paths_to_size {
         if cancel.load(Ordering::Relaxed) {
             return;
         }
-        let size = calculate_size_cancellable(&path, Some(cancel));
+        let size = if ignore.is_empty() {
+            calculate_size_cancellable(&path, Some(cancel))
+        } else {
+            calculate_size_with_ignore(&path, &ignore, Some(cancel))
+        };
         if cancel.load(Ordering::Relaxed) {
             return;
         }
@@ -463,6 +511,7 @@ mod tests {
                 restore: crate::module::manifest::RestoreKind::default(),
                 restore_steps: None,
                 risk: crate::module::manifest::RiskLevel::default(),
+                ignore: vec![],
             }],
         };
 

@@ -1055,6 +1055,7 @@ impl App {
                     restore_kind: crate::module::manifest::RestoreKind::default(),
                     restore_steps: None,
                     risk_level: crate::module::manifest::RiskLevel::default(),
+                    ignore_patterns: vec![],
                 });
             }
         }
@@ -1399,8 +1400,17 @@ impl App {
     /// Spawn cleanup as a background blocking task, transitioning to CleanupProgress view.
     pub(crate) fn start_cleanup(&mut self, permanent: bool) {
         let deduped = crate::tui::views::cleanup_confirm::dedup_paths(&self.confirm_checked);
-        let paths: Vec<PathBuf> = deduped.into_iter().collect();
-        let total = paths.len();
+        let cleanup_items: Vec<cleaner::CleanupItem> = deduped
+            .into_iter()
+            .map(|path| {
+                let ignore_patterns = self.find_ignore_patterns(&path);
+                cleaner::CleanupItem {
+                    path,
+                    ignore_patterns,
+                }
+            })
+            .collect();
+        let total = cleanup_items.len();
         if total == 0 {
             return;
         }
@@ -1425,9 +1435,9 @@ impl App {
 
         tokio::task::spawn_blocking(move || {
             let result = if permanent {
-                cleaner::delete_items(&paths, &opts, &cancel_clone, &tx)
+                cleaner::delete_items(&cleanup_items, &opts, &cancel_clone, &tx)
             } else {
-                cleaner::trash_items(&paths, &opts, &cancel_clone, &tx)
+                cleaner::trash_items(&cleanup_items, &opts, &cancel_clone, &tx)
             };
             let _ = tx.send(CleanupMessage::Complete(result));
         });
@@ -1444,6 +1454,18 @@ impl App {
 
         self.clear_filter();
         self.set_view(View::CleanupProgress);
+    }
+
+    /// Look up ignore patterns for a path from module items.
+    fn find_ignore_patterns(&self, path: &Path) -> Vec<String> {
+        for ms in &self.modules {
+            for item in &ms.items {
+                if item.path == path {
+                    return item.ignore_patterns.clone();
+                }
+            }
+        }
+        Vec::new()
     }
 
     /// Process cleanup messages from the background task.
@@ -1966,6 +1988,7 @@ mod tests {
                 restore: crate::module::manifest::RestoreKind::default(),
                 restore_steps: None,
                 risk: crate::module::manifest::RiskLevel::default(),
+                ignore: vec![],
             }],
         };
         let items = items
@@ -1981,6 +2004,7 @@ mod tests {
                 restore_kind: crate::module::manifest::RestoreKind::default(),
                 restore_steps: None,
                 risk_level: crate::module::manifest::RiskLevel::default(),
+                ignore_patterns: vec![],
             })
             .collect();
         ModuleState {

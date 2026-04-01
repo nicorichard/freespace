@@ -267,7 +267,7 @@ fn prompt_module_selection(modules: &[(String, Module)]) -> Result<Vec<usize>, I
 }
 
 /// Check that git is available on the system.
-pub(crate) fn check_git_available() -> Result<(), InstallError> {
+pub fn check_git_available() -> Result<(), InstallError> {
     Command::new("git")
         .arg("--version")
         .output()
@@ -278,7 +278,7 @@ pub(crate) fn check_git_available() -> Result<(), InstallError> {
 /// Clone a repository to a temporary directory. Returns (temp_dir_path, commit_sha).
 ///
 /// Tries each URL from `clone_urls()` in order (HTTPS first, SSH fallback).
-pub(crate) fn clone_repo(source: &SourceIdentifier) -> Result<(PathBuf, String), InstallError> {
+pub fn clone_repo(source: &SourceIdentifier) -> Result<(PathBuf, String), InstallError> {
     let urls = source.clone_urls();
     if urls.is_empty() {
         return Err(InstallError::CloneFailed("not a GitHub source".to_string()));
@@ -394,6 +394,69 @@ fn parse_manifest(path: &Path) -> Result<Module, InstallError> {
         path: path.display().to_string(),
         reason: e.to_string(),
     })
+}
+
+/// Result of validating a single module.
+pub struct ValidateResult {
+    /// Directory name (or "." for single-module root layout).
+    pub dir_name: String,
+    /// Ok(module) if valid, Err(message) if invalid.
+    pub result: Result<Module, String>,
+}
+
+/// Validate all modules in a source directory without short-circuiting on errors.
+///
+/// Unlike `detect_layout`, this collects results for every module found
+/// (single or multi-module layout) so that all errors can be reported at once.
+pub fn validate_all(source_dir: &Path) -> Vec<ValidateResult> {
+    // Check for root-level module.toml first (single-module layout)
+    let root_manifest = source_dir.join("module.toml");
+    if root_manifest.exists() {
+        let result = parse_manifest(&root_manifest).map_err(|e| e.to_string());
+        return vec![ValidateResult {
+            dir_name: ".".to_string(),
+            result,
+        }];
+    }
+
+    // Multi-module layout: scan subdirectories
+    let entries = match fs::read_dir(source_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            return vec![ValidateResult {
+                dir_name: source_dir.display().to_string(),
+                result: Err(format!("failed to read directory: {}", e)),
+            }];
+        }
+    };
+
+    let mut results = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        // Skip .git and other hidden directories
+        if path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+        {
+            continue;
+        }
+
+        let manifest_path = path.join("module.toml");
+        if !manifest_path.exists() {
+            continue;
+        }
+
+        let dir_name = path.file_name().unwrap().to_string_lossy().to_string();
+        let result = parse_manifest(&manifest_path).map_err(|e| e.to_string());
+        results.push(ValidateResult { dir_name, result });
+    }
+
+    results.sort_by(|a, b| a.dir_name.cmp(&b.dir_name));
+    results
 }
 
 /// Copy a module directory to the install destination and write source.toml.

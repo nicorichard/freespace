@@ -70,6 +70,20 @@ Modules are declarative TOML manifests — no code execution.
 - Platform-filtered via `platform` field (macos/linux/windows)
 - Use `glob` patterns and `local_target` paths to discover items
 
+## UI Design Guide
+
+All TUI changes **must** follow [`docs/UI_DESIGN_GUIDE.md`](docs/UI_DESIGN_GUIDE.md).
+Read it before modifying any view, widget, or keybinding. Key rules:
+
+- Every screen needs a `[?] help` hint and status bar with hotkey hints
+- All scrollable surfaces support arrow keys, vim keys (`j`/`k`/`h`/`l`), and emacs keys (`Ctrl+N`/`P`/`F`/`B`)
+- Large lists must support `/` search
+- Multi-selectable interfaces need `Space` (toggle), `a` (all), `n` (none)
+- Dialogs favour movement (navigable lists) over hotkeys
+- All colors go through `Theme` style methods — never hardcode
+- Use `self.set_view()` for view transitions, never direct assignment
+- Add hotkey definitions to `keybindings.rs` for new actions
+
 ## Conventions
 
 - `anyhow` for error propagation, `thiserror` for typed errors in core

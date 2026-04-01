@@ -45,6 +45,22 @@ impl Default for CleanupOptions {
     }
 }
 
+/// An item to be cleaned up, with optional ignore patterns.
+pub struct CleanupItem {
+    pub path: PathBuf,
+    /// Glob patterns for files/directories to preserve within this path.
+    pub ignore_patterns: Vec<String>,
+}
+
+impl From<PathBuf> for CleanupItem {
+    fn from(path: PathBuf) -> Self {
+        Self {
+            path,
+            ignore_patterns: Vec::new(),
+        }
+    }
+}
+
 /// Result of a cleanup operation.
 pub struct CleanupResult {
     pub succeeded: Vec<PathBuf>,
@@ -56,7 +72,7 @@ pub struct CleanupResult {
 /// Checks `cancel` between each item and stops early if set.
 /// Sends `CleanupMessage::Progress` after each item and `CleanupMessage::Complete` when done.
 pub fn trash_items(
-    paths: &[PathBuf],
+    items: &[CleanupItem],
     opts: &CleanupOptions,
     cancel: &AtomicBool,
     progress_tx: &mpsc::UnboundedSender<CleanupMessage>,
@@ -65,9 +81,10 @@ pub fn trash_items(
         succeeded: Vec::new(),
         failed: Vec::new(),
     };
-    let total = paths.len();
+    let total = items.len();
 
-    for (i, path) in paths.iter().enumerate() {
+    for (i, item) in items.iter().enumerate() {
+        let path = &item.path;
         if cancel.load(Ordering::Relaxed) {
             break;
         }
@@ -76,6 +93,16 @@ pub fn trash_items(
             result.failed.push((path.clone(), reason));
         } else if opts.dry_run {
             result.succeeded.push(path.clone());
+        } else if !item.ignore_patterns.is_empty() && path.is_dir() {
+            match trash_dir_filtered(path, &item.ignore_patterns) {
+                Ok(()) => {
+                    if opts.audit_log {
+                        audit::log_operation("TRASH", path, None, &opts.module_id);
+                    }
+                    result.succeeded.push(path.clone());
+                }
+                Err(e) => result.failed.push((path.clone(), e.to_string())),
+            }
         } else {
             match trash::delete(path) {
                 Ok(()) => {
@@ -103,7 +130,7 @@ pub fn trash_items(
 /// Checks `cancel` between each item and stops early if set.
 /// Sends `CleanupMessage::Progress` after each item and `CleanupMessage::Complete` when done.
 pub fn delete_items(
-    paths: &[PathBuf],
+    items: &[CleanupItem],
     opts: &CleanupOptions,
     cancel: &AtomicBool,
     progress_tx: &mpsc::UnboundedSender<CleanupMessage>,
@@ -112,9 +139,10 @@ pub fn delete_items(
         succeeded: Vec::new(),
         failed: Vec::new(),
     };
-    let total = paths.len();
+    let total = items.len();
 
-    for (i, path) in paths.iter().enumerate() {
+    for (i, item) in items.iter().enumerate() {
+        let path = &item.path;
         if cancel.load(Ordering::Relaxed) {
             break;
         }
@@ -123,6 +151,16 @@ pub fn delete_items(
             result.failed.push((path.clone(), reason));
         } else if opts.dry_run {
             result.succeeded.push(path.clone());
+        } else if !item.ignore_patterns.is_empty() && path.is_dir() {
+            match delete_dir_filtered(path, &item.ignore_patterns) {
+                Ok(()) => {
+                    if opts.audit_log {
+                        audit::log_operation("DELETE", path, None, &opts.module_id);
+                    }
+                    result.succeeded.push(path.clone());
+                }
+                Err(e) => result.failed.push((path.clone(), e.to_string())),
+            }
         } else {
             let res = if safety::is_symlink(path) {
                 std::fs::remove_file(path)
@@ -151,6 +189,50 @@ pub fn delete_items(
     }
 
     result
+}
+
+/// Delete a directory's contents while preserving entries matching ignore patterns.
+fn delete_dir_filtered(path: &Path, ignore_patterns: &[String]) -> std::io::Result<()> {
+    let compiled: Vec<glob::Pattern> = ignore_patterns
+        .iter()
+        .filter_map(|p| glob::Pattern::new(p).ok())
+        .collect();
+
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if compiled.iter().any(|p| p.matches(&name_str)) {
+            continue;
+        }
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            std::fs::remove_dir_all(&entry_path)?;
+        } else {
+            std::fs::remove_file(&entry_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Trash a directory's contents while preserving entries matching ignore patterns.
+fn trash_dir_filtered(path: &Path, ignore_patterns: &[String]) -> Result<(), String> {
+    let compiled: Vec<glob::Pattern> = ignore_patterns
+        .iter()
+        .filter_map(|p| glob::Pattern::new(p).ok())
+        .collect();
+
+    let entries = std::fs::read_dir(path).map_err(|e| e.to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if compiled.iter().any(|p| p.matches(&name_str)) {
+            continue;
+        }
+        trash::delete(entry.path()).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Run safety checks on a path. Returns an error reason if blocked, or `None` if safe.
@@ -193,6 +275,11 @@ mod tests {
         tx
     }
 
+    /// Convert PathBufs to CleanupItems with no ignore patterns.
+    fn items(paths: &[PathBuf]) -> Vec<CleanupItem> {
+        paths.iter().map(|p| CleanupItem::from(p.clone())).collect()
+    }
+
     #[test]
     fn delete_file() {
         let tmp = TempDir::new().unwrap();
@@ -200,7 +287,12 @@ mod tests {
         fs::write(&file, "data").unwrap();
         assert!(file.exists());
 
-        let result = delete_items(&[file.clone()], &default_opts(), &no_cancel(), &test_tx());
+        let result = delete_items(
+            &items(&[file.clone()]),
+            &default_opts(),
+            &no_cancel(),
+            &test_tx(),
+        );
         assert_eq!(result.succeeded.len(), 1);
         assert!(result.failed.is_empty());
         assert!(!file.exists());
@@ -213,7 +305,12 @@ mod tests {
         fs::create_dir(&dir).unwrap();
         fs::write(dir.join("inner.txt"), "data").unwrap();
 
-        let result = delete_items(&[dir.clone()], &default_opts(), &no_cancel(), &test_tx());
+        let result = delete_items(
+            &items(&[dir.clone()]),
+            &default_opts(),
+            &no_cancel(),
+            &test_tx(),
+        );
         assert_eq!(result.succeeded.len(), 1);
         assert!(!dir.exists());
     }
@@ -221,7 +318,7 @@ mod tests {
     #[test]
     fn delete_nonexistent_fails() {
         let result = delete_items(
-            &[PathBuf::from("/nonexistent/path/xyz123")],
+            &items(&[PathBuf::from("/nonexistent/path/xyz123")]),
             &default_opts(),
             &no_cancel(),
             &test_tx(),
@@ -238,7 +335,7 @@ mod tests {
         let missing = PathBuf::from("/nonexistent/path/xyz123");
 
         let result = delete_items(
-            &[file.clone(), missing],
+            &items(&[file.clone(), missing]),
             &default_opts(),
             &no_cancel(),
             &test_tx(),
@@ -253,7 +350,12 @@ mod tests {
         let file = tmp.path().join("trashme.txt");
         fs::write(&file, "data").unwrap();
 
-        let result = trash_items(&[file.clone()], &default_opts(), &no_cancel(), &test_tx());
+        let result = trash_items(
+            &items(&[file.clone()]),
+            &default_opts(),
+            &no_cancel(),
+            &test_tx(),
+        );
         assert_eq!(result.succeeded.len(), 1);
         assert!(result.failed.is_empty());
         assert!(!file.exists());
@@ -262,7 +364,7 @@ mod tests {
     #[test]
     fn trash_nonexistent_fails() {
         let result = trash_items(
-            &[PathBuf::from("/nonexistent/path/xyz123")],
+            &items(&[PathBuf::from("/nonexistent/path/xyz123")]),
             &default_opts(),
             &no_cancel(),
             &test_tx(),
@@ -283,7 +385,7 @@ mod tests {
             enforce_scope: false,
             ..CleanupOptions::default()
         };
-        let result = delete_items(&[file.clone()], &opts, &no_cancel(), &test_tx());
+        let result = delete_items(&items(&[file.clone()]), &opts, &no_cancel(), &test_tx());
         assert_eq!(result.succeeded.len(), 1);
         assert!(file.exists(), "file should still exist in dry-run mode");
     }
@@ -300,7 +402,7 @@ mod tests {
             enforce_scope: false,
             ..CleanupOptions::default()
         };
-        let result = trash_items(&[file.clone()], &opts, &no_cancel(), &test_tx());
+        let result = trash_items(&items(&[file.clone()]), &opts, &no_cancel(), &test_tx());
         assert_eq!(result.succeeded.len(), 1);
         assert!(file.exists(), "file should still exist in dry-run mode");
     }
@@ -317,7 +419,7 @@ mod tests {
             enforce_scope: false,
             ..CleanupOptions::default()
         };
-        let result = delete_items(&[file.clone()], &opts, &no_cancel(), &test_tx());
+        let result = delete_items(&items(&[file.clone()]), &opts, &no_cancel(), &test_tx());
         assert!(result.succeeded.is_empty());
         assert_eq!(result.failed.len(), 1);
         assert!(result.failed[0].1.contains("blocked by safety rule"));
@@ -335,7 +437,12 @@ mod tests {
         let link = tmp.path().join("link_dir");
         std::os::unix::fs::symlink(&target_dir, &link).unwrap();
 
-        let result = delete_items(&[link.clone()], &default_opts(), &no_cancel(), &test_tx());
+        let result = delete_items(
+            &items(&[link.clone()]),
+            &default_opts(),
+            &no_cancel(),
+            &test_tx(),
+        );
         assert_eq!(result.succeeded.len(), 1);
         assert!(!link.exists(), "symlink should be removed");
         assert!(target_dir.exists(), "target directory should still exist");
@@ -402,7 +509,7 @@ mod tests {
         cancel.store(true, Ordering::Relaxed);
 
         let result = delete_items(
-            &[f1.clone(), f2.clone(), f3.clone()],
+            &items(&[f1.clone(), f2.clone(), f3.clone()]),
             &default_opts(),
             &cancel,
             &tx,
@@ -417,5 +524,53 @@ mod tests {
 
         // No progress messages sent
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn delete_with_ignore_preserves_matching() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("target_dir");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("cache.dat"), "cache").unwrap();
+        fs::write(dir.join("config.plist"), "config").unwrap();
+        fs::write(dir.join("other.log"), "log").unwrap();
+
+        let cleanup_items = vec![CleanupItem {
+            path: dir.clone(),
+            ignore_patterns: vec!["config.plist".to_string()],
+        }];
+
+        let result = delete_items(&cleanup_items, &default_opts(), &no_cancel(), &test_tx());
+        assert_eq!(result.succeeded.len(), 1);
+        // The directory and ignored file should still exist
+        assert!(dir.exists(), "directory should still exist");
+        assert!(
+            dir.join("config.plist").exists(),
+            "ignored file should be preserved"
+        );
+        // Other files should be gone
+        assert!(!dir.join("cache.dat").exists(), "cache should be deleted");
+        assert!(!dir.join("other.log").exists(), "log should be deleted");
+    }
+
+    #[test]
+    fn delete_with_glob_ignore() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("target_dir");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("data.dat"), "data").unwrap();
+        fs::write(dir.join("a.lock"), "lock1").unwrap();
+        fs::write(dir.join("b.lock"), "lock2").unwrap();
+
+        let cleanup_items = vec![CleanupItem {
+            path: dir.clone(),
+            ignore_patterns: vec!["*.lock".to_string()],
+        }];
+
+        let result = delete_items(&cleanup_items, &default_opts(), &no_cancel(), &test_tx());
+        assert_eq!(result.succeeded.len(), 1);
+        assert!(!dir.join("data.dat").exists(), "data should be deleted");
+        assert!(dir.join("a.lock").exists(), "a.lock should be preserved");
+        assert!(dir.join("b.lock").exists(), "b.lock should be preserved");
     }
 }
