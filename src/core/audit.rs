@@ -38,11 +38,18 @@ fn try_log(op: &str, path: &Path, size: Option<u64>, module_id: &str) -> Option<
         .open(&log_path)
         .ok()?;
 
-    // Collapse home prefix for readability
     let display_path = collapse_home(path);
+    let line = format_entry(op, &display_path, size, module_id);
+
+    writeln!(file, "{line}").ok()?;
+
+    Some(())
+}
+
+/// Format a single JSONL audit entry. Built manually to avoid pulling in serde_json.
+fn format_entry(op: &str, display_path: &str, size: Option<u64>, module_id: &str) -> String {
     let now = now_iso8601();
 
-    // Build JSON manually to avoid pulling in serde_json for one call site.
     let size_field = match size {
         Some(s) => format!(",\"size\":{s}"),
         None => String::new(),
@@ -54,15 +61,11 @@ fn try_log(op: &str, path: &Path, size: Option<u64>, module_id: &str) -> Option<
         format!(",\"module\":\"{}\"", escape_json(module_id))
     };
 
-    writeln!(
-        file,
+    format!(
         "{{\"timestamp\":\"{now}\",\"operation\":\"{}\",\"path\":\"{}\"{size_field}{module_field}}}",
         escape_json(op),
-        escape_json(&display_path),
+        escape_json(display_path),
     )
-    .ok()?;
-
-    Some(())
 }
 
 /// Escape special characters for JSON string values.
@@ -214,6 +217,84 @@ mod tests {
         assert_eq!(escape_json("say \"hi\""), "say \\\"hi\\\"");
         assert_eq!(escape_json("back\\slash"), "back\\\\slash");
         assert_eq!(escape_json("new\nline"), "new\\nline");
+    }
+
+    /// Helper: extract a JSON string value by key from a JSON line.
+    fn json_str<'a>(json: &'a str, key: &str) -> Option<String> {
+        let needle = format!("\"{}\":\"", key);
+        let start = json.find(&needle)? + needle.len();
+        let rest = &json[start..];
+        // Walk to the closing unescaped quote
+        let mut end = 0;
+        let bytes = rest.as_bytes();
+        while end < bytes.len() {
+            if bytes[end] == b'\\' {
+                end += 2; // skip escaped char
+            } else if bytes[end] == b'"' {
+                break;
+            } else {
+                end += 1;
+            }
+        }
+        Some(rest[..end].to_string())
+    }
+
+    /// Helper: extract a JSON numeric value by key.
+    fn json_num(json: &str, key: &str) -> Option<u64> {
+        let needle = format!("\"{}\":", key);
+        let start = json.find(&needle)? + needle.len();
+        let rest = &json[start..];
+        let end = rest
+            .find(|c: char| c == ',' || c == '}')
+            .unwrap_or(rest.len());
+        rest[..end].trim().parse().ok()
+    }
+
+    /// Helper: check if a key is present in the JSON line.
+    fn json_has_key(json: &str, key: &str) -> bool {
+        json.contains(&format!("\"{}\":", key))
+    }
+
+    #[test]
+    fn format_entry_all_fields() {
+        let line = format_entry(
+            "TRASH",
+            "~/Library/Caches/docker",
+            Some(2_147_483_648),
+            "docker",
+        );
+        // Starts and ends as JSON object
+        assert!(line.starts_with('{') && line.ends_with('}'));
+        assert_eq!(json_str(&line, "operation").unwrap(), "TRASH");
+        assert_eq!(json_str(&line, "path").unwrap(), "~/Library/Caches/docker");
+        assert_eq!(json_num(&line, "size").unwrap(), 2_147_483_648);
+        assert_eq!(json_str(&line, "module").unwrap(), "docker");
+        // Timestamp present and well-formed
+        let ts = json_str(&line, "timestamp").unwrap();
+        assert_eq!(ts.len(), 20);
+        assert!(ts.ends_with('Z'));
+    }
+
+    #[test]
+    fn format_entry_omits_size_when_none() {
+        let line = format_entry("DELETE", "/tmp/foo", None, "test-mod");
+        assert_eq!(json_str(&line, "operation").unwrap(), "DELETE");
+        assert!(!json_has_key(&line, "size"));
+        assert_eq!(json_str(&line, "module").unwrap(), "test-mod");
+    }
+
+    #[test]
+    fn format_entry_omits_module_when_empty() {
+        let line = format_entry("TRASH", "~/cache", Some(1024), "");
+        assert_eq!(json_num(&line, "size").unwrap(), 1024);
+        assert!(!json_has_key(&line, "module"));
+    }
+
+    #[test]
+    fn format_entry_handles_path_with_quotes() {
+        let line = format_entry("TRASH", "~/path with \"quotes\"", None, "");
+        let path = json_str(&line, "path").unwrap();
+        assert_eq!(path, "~/path with \\\"quotes\\\"");
     }
 
     #[test]
