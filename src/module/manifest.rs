@@ -127,6 +127,10 @@ struct RawTarget {
     description: Option<String>,
     #[serde(default)]
     restore: RestoreKind,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_string_or_string_vec"
+    )]
     restore_steps: Option<String>,
     #[serde(default)]
     risk: RiskLevel,
@@ -171,6 +175,71 @@ where
     D: Deserializer<'de>,
 {
     deserialize_string_or_vec(deserializer).map(Some)
+}
+
+/// Deserialize an optional field that accepts a string or an array of strings, joining arrays
+/// with newlines into a single string.
+fn deserialize_optional_string_or_string_vec<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct StringOrStringVec;
+
+    impl<'de> de::Visitor<'de> for StringOrStringVec {
+        type Value = Option<String>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a string or list of strings")
+        }
+
+        fn visit_none<E: de::Error>(self) -> std::result::Result<Option<String>, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D: Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> std::result::Result<Option<String>, D::Error> {
+            deserializer
+                .deserialize_any(StringOrStringVecInner)
+                .map(Some)
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Option<String>, E> {
+            Ok(Some(v.to_string()))
+        }
+
+        fn visit_seq<A: de::SeqAccess<'de>>(
+            self,
+            seq: A,
+        ) -> std::result::Result<Option<String>, A::Error> {
+            let items: Vec<String> = Vec::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
+            Ok(Some(items.join("\n")))
+        }
+    }
+
+    struct StringOrStringVecInner;
+
+    impl<'de> de::Visitor<'de> for StringOrStringVecInner {
+        type Value = String;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a string or list of strings")
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<String, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_seq<A: de::SeqAccess<'de>>(self, seq: A) -> std::result::Result<String, A::Error> {
+            let items: Vec<String> = Vec::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
+            Ok(items.join("\n"))
+        }
+    }
+
+    deserializer.deserialize_any(StringOrStringVec)
 }
 
 impl Module {

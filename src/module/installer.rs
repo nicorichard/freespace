@@ -367,9 +367,15 @@ pub(crate) fn detect_layout(source_dir: &Path) -> Result<RepoLayout, InstallErro
 
         let manifest_path = path.join("module.toml");
         if manifest_path.exists() {
-            let module = parse_manifest(&manifest_path)?;
-            let dir_name = path.file_name().unwrap().to_string_lossy().to_string();
-            modules.push((dir_name, module));
+            match parse_manifest(&manifest_path) {
+                Ok(module) => {
+                    let dir_name = path.file_name().unwrap().to_string_lossy().to_string();
+                    modules.push((dir_name, module));
+                }
+                Err(e) => {
+                    eprintln!("warning: skipping {}: {}", manifest_path.display(), e);
+                }
+            }
         }
     }
 
