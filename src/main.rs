@@ -67,6 +67,9 @@ enum ModuleCommand {
     Install {
         /// Source (e.g. github:user/repo@v1.0.0#module-name or /path/to/module)
         source: String,
+        /// Symlink local sources instead of copying (for module development)
+        #[arg(long)]
+        link: bool,
     },
     /// List installed modules
     List,
@@ -194,10 +197,10 @@ async fn main() -> anyhow::Result<()> {
             fs::create_dir_all(&modules_dir)?;
 
             match command {
-                ModuleCommand::Install { source } => {
+                ModuleCommand::Install { source, link } => {
                     tui::install_panic_hook();
                     let mut terminal = tui::init()?;
-                    let mut app = app::App::new_for_install(source, modules_dir.clone());
+                    let mut app = app::App::new_for_install(source, modules_dir.clone(), link);
                     app.run(&mut terminal)?;
                     tui::restore()?;
                 }

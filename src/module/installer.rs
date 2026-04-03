@@ -158,7 +158,7 @@ fn install_from_local(
 }
 
 /// Create a symlink from dest -> src, removing any existing dest first.
-fn symlink_module(src: &Path, dest: &Path) -> Result<(), InstallError> {
+pub fn symlink_module(src: &Path, dest: &Path) -> Result<(), InstallError> {
     if dest.exists() || dest.symlink_metadata().is_ok() {
         if dest.is_dir() && !dest.symlink_metadata().is_ok_and(|m| m.is_symlink()) {
             fs::remove_dir_all(dest)

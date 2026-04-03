@@ -385,7 +385,7 @@ impl App {
     }
 
     /// Create a new App in install-only mode: no scanning, just the install picker.
-    pub fn new_for_install(source_str: String, modules_dir: PathBuf) -> Self {
+    pub fn new_for_install(source_str: String, modules_dir: PathBuf, link: bool) -> Self {
         let config = AppConfig::load().unwrap_or_default();
         let (tx, rx) = mpsc::unbounded_channel();
         let (disk_total, disk_free) = disk_stats().unzip();
@@ -444,12 +444,12 @@ impl App {
             install_rx: None,
             install_mode: true,
         };
-        app.start_module_install(source_str, modules_dir);
+        app.start_module_install(source_str, modules_dir, link);
         app
     }
 
     /// Begin an install flow: clone the source in the background and transition to the picker.
-    pub fn start_module_install(&mut self, source_str: String, modules_dir: PathBuf) {
+    pub fn start_module_install(&mut self, source_str: String, modules_dir: PathBuf, link: bool) {
         use crate::module::installer;
         use crate::module::source::SourceIdentifier;
 
@@ -462,6 +462,7 @@ impl App {
             commit_sha: None,
             results: Vec::new(),
             modules_dir: modules_dir.clone(),
+            link,
         });
         self.set_view(View::ModuleInstall);
 
@@ -617,6 +618,7 @@ impl App {
         };
         let commit_sha = state.commit_sha.clone();
         let modules_dir = state.modules_dir.clone();
+        let link = state.link;
 
         // Collect what to install, update, and remove
         let mut to_install: Vec<(String, String)> = Vec::new(); // (dir_name, module_name)
@@ -659,32 +661,45 @@ impl App {
             for (dir_name, module_name) in &to_install {
                 let src = source_dir.join(dir_name);
                 let dest = modules_dir.join(dir_name);
-                let source_info = installer::make_source_info(&source, &commit_sha, Some(dir_name));
 
-                // Read the module manifest from source
-                let manifest_path = src.join("module.toml");
-                let module = match std::fs::read_to_string(&manifest_path)
-                    .ok()
-                    .and_then(|c| crate::module::manifest::Module::parse(&c).ok())
-                {
-                    Some(m) => m,
-                    None => {
-                        results.push(format!("Failed to read manifest for {}", module_name));
-                        continue;
+                if link {
+                    match installer::symlink_module(&src, &dest) {
+                        Ok(()) => {
+                            results.push(format!("Linked {}", module_name));
+                        }
+                        Err(e) => {
+                            results.push(format!("Failed to link {}: {}", module_name, e));
+                        }
                     }
-                };
+                } else {
+                    let source_info =
+                        installer::make_source_info(&source, &commit_sha, Some(dir_name));
 
-                match installer::install_module_dir(&src, &dest, &source_info, &module) {
-                    Ok(r) => {
-                        let action = if r.was_upgrade {
-                            "Updated"
-                        } else {
-                            "Installed"
-                        };
-                        results.push(format!("{} {} v{}", action, r.name, r.version));
-                    }
-                    Err(e) => {
-                        results.push(format!("Failed to install {}: {}", module_name, e));
+                    // Read the module manifest from source
+                    let manifest_path = src.join("module.toml");
+                    let module = match std::fs::read_to_string(&manifest_path)
+                        .ok()
+                        .and_then(|c| crate::module::manifest::Module::parse(&c).ok())
+                    {
+                        Some(m) => m,
+                        None => {
+                            results.push(format!("Failed to read manifest for {}", module_name));
+                            continue;
+                        }
+                    };
+
+                    match installer::install_module_dir(&src, &dest, &source_info, &module) {
+                        Ok(r) => {
+                            let action = if r.was_upgrade {
+                                "Updated"
+                            } else {
+                                "Installed"
+                            };
+                            results.push(format!("{} {} v{}", action, r.name, r.version));
+                        }
+                        Err(e) => {
+                            results.push(format!("Failed to install {}: {}", module_name, e));
+                        }
                     }
                 }
             }

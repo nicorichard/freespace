@@ -44,6 +44,7 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
             app.start_module_install(
                 crate::config::COMMUNITY_MODULES_SOURCE.to_string(),
                 modules_dir,
+                false,
             );
         }
         return;

@@ -149,6 +149,8 @@ pub struct ModuleInstallState {
     pub results: Vec<String>,
     /// Path to the modules install directory.
     pub modules_dir: PathBuf,
+    /// Symlink local sources instead of copying.
+    pub link: bool,
 }
 
 /// Messages sent from background install tasks to the event loop.
