@@ -12,7 +12,7 @@ pub use types::{
     SiblingUpdatePrompt, View,
 };
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
@@ -28,6 +28,7 @@ use crate::config::AppConfig;
 use crate::core::cleaner::{self, CleanupMessage, CleanupOptions};
 use crate::core::safety;
 use crate::core::scanner::{self, ScanMessage};
+use crate::core::stats;
 use crate::module::manager;
 use crate::module::manifest::Module;
 use crate::tui::theme::Theme;
@@ -140,6 +141,10 @@ pub struct App {
     install_rx: Option<mpsc::UnboundedReceiver<InstallMessage>>,
     /// Whether the app was launched in install-only mode (exits after install).
     pub install_mode: bool,
+    /// All-time cleanup statistics (persisted to ~/.config/freespace/stats.json).
+    pub stats: stats::Stats,
+    /// Metadata snapshot for in-flight cleanup: path -> (module_id, size).
+    cleanup_item_meta: HashMap<PathBuf, (String, u64)>,
 }
 
 /// Spawn background update checks for all git-sourced modules.
@@ -381,6 +386,8 @@ impl App {
             install_state: None,
             install_rx: None,
             install_mode: false,
+            stats: stats::Stats::load(),
+            cleanup_item_meta: HashMap::new(),
         }
     }
 
@@ -443,6 +450,8 @@ impl App {
             install_state: None,
             install_rx: None,
             install_mode: true,
+            stats: stats::Stats::load(),
+            cleanup_item_meta: HashMap::new(),
         };
         app.start_module_install(source_str, modules_dir, link);
         app
@@ -1432,6 +1441,15 @@ impl App {
             return;
         }
 
+        // Snapshot item metadata so we can attribute freed bytes after cleanup.
+        self.cleanup_item_meta.clear();
+        for item in &cleanup_items {
+            if let Some(size) = item.size {
+                self.cleanup_item_meta
+                    .insert(item.path.clone(), (item.module_id.clone(), size));
+            }
+        }
+
         // Keep only unchecked items in the selection cart
         self.selected_items
             .retain(|p| !self.confirm_checked.contains(p));
@@ -1769,6 +1787,20 @@ impl App {
         let failed_count = result.failed.len();
         let total_count = succeeded.len() + failed_count;
 
+        // Record freed bytes in persistent stats (skip dry-run).
+        if !self.dry_run {
+            let mut per_module: HashMap<String, u64> = HashMap::new();
+            for path in &succeeded {
+                if let Some((module_id, size)) = self.cleanup_item_meta.get(path) {
+                    *per_module.entry(module_id.clone()).or_default() += size;
+                }
+            }
+            for (module_id, bytes) in per_module {
+                self.stats.record(&module_id, bytes);
+            }
+        }
+        self.cleanup_item_meta.clear();
+
         // Collect drill item sizes before clearing drill state
         let drill_item_sizes = self.drill.collect_item_sizes();
 
@@ -1961,6 +1993,8 @@ impl App {
             install_state: None,
             install_rx: None,
             install_mode: false,
+            stats: stats::Stats::load(),
+            cleanup_item_meta: HashMap::new(),
         }
     }
 }

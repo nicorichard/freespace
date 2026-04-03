@@ -12,7 +12,7 @@ use ratatui::Frame;
 use crate::app::{App, ModuleUpdateStatus, SiblingUpdatePrompt, View};
 use crate::module::installer;
 use crate::module::manifest::{RestoreKind, RiskLevel};
-use crate::tui::widgets::centered_rect;
+use crate::tui::widgets::{centered_rect, format_size};
 
 /// Handle key events for the info overlay.
 pub fn handle_key(app: &mut App, key: KeyCode, module_idx: usize) {
@@ -187,6 +187,8 @@ fn render_metadata(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usi
     let platforms_str = m.platforms.join(", ");
     let targets_str = format!("{}", m.targets.len());
     let manifest_str = ms.manifest_path.as_ref().map(|p| p.display().to_string());
+    let cleaned_bytes = app.stats.module_total(&m.id);
+    let cleaned_str = format_size(cleaned_bytes);
 
     let mut rows: Vec<Row> = vec![
         metadata_row("Name", &m.name, label_style, value_style),
@@ -203,6 +205,15 @@ fn render_metadata(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usi
         metadata_row("Platforms", &platforms_str, label_style, value_style),
         metadata_row("Targets", &targets_str, label_style, value_style),
     ];
+
+    if cleaned_bytes > 0 {
+        rows.push(metadata_row(
+            "Cleaned",
+            &cleaned_str,
+            label_style,
+            value_style,
+        ));
+    }
 
     // Per-target restore/risk info (only show targets with non-default values)
     let has_target_metadata = m.targets.iter().any(|t| {

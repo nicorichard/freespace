@@ -449,8 +449,18 @@ fn render_title_bar(app: &mut App, frame: &mut Frame, area: Rect) {
         _ => {
             let any_known = app.modules.iter().any(|m| m.total_size.is_some());
             let mut spans = if any_known {
+                let freed = app.stats.total_freed;
+                let freed_suffix = if freed > 0 {
+                    format!("({} freed) ", format_size(freed))
+                } else {
+                    String::new()
+                };
                 vec![Span::styled(
-                    format!(" Freespace \u{2014} {} reclaimable ", format_size(total)),
+                    format!(
+                        " Freespace \u{2014} {} reclaimable {}",
+                        format_size(total),
+                        freed_suffix,
+                    ),
                     app.theme.style_header(),
                 )]
             } else {
