@@ -1418,10 +1418,12 @@ impl App {
         let cleanup_items: Vec<cleaner::CleanupItem> = deduped
             .into_iter()
             .map(|path| {
-                let ignore_patterns = self.find_ignore_patterns(&path);
+                let (ignore_patterns, module_id, size) = self.find_item_metadata(&path);
                 cleaner::CleanupItem {
                     path,
                     ignore_patterns,
+                    module_id,
+                    size,
                 }
             })
             .collect();
@@ -1438,7 +1440,6 @@ impl App {
         let opts = CleanupOptions {
             dry_run: self.dry_run,
             protected_paths: self.protected_paths.clone(),
-            module_id: String::new(),
             audit_log: self.audit_log,
             enforce_scope: self.enforce_scope,
             allow_warned: true,
@@ -1472,15 +1473,20 @@ impl App {
     }
 
     /// Look up ignore patterns for a path from module items.
-    fn find_ignore_patterns(&self, path: &Path) -> Vec<String> {
+    /// Look up metadata for a cleanup item: ignore patterns, owning module ID, and size.
+    fn find_item_metadata(&self, path: &Path) -> (Vec<String>, String, Option<u64>) {
         for ms in &self.modules {
             for item in &ms.items {
                 if item.path == path {
-                    return item.ignore_patterns.clone();
+                    return (
+                        item.ignore_patterns.clone(),
+                        ms.module.id.clone(),
+                        item.size,
+                    );
                 }
             }
         }
-        Vec::new()
+        (Vec::new(), String::new(), None)
     }
 
     /// Process cleanup messages from the background task.

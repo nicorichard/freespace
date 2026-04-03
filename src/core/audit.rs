@@ -1,13 +1,14 @@
 // Audit trail for cleanup operations.
+//
+// Each entry is a single JSON line (JSONL) written to `~/.config/freespace/audit.log`.
+// Example:
+//   {"timestamp":"2026-03-03T14:22:01Z","operation":"trash","path":"~/Library/Caches/docker","size":2147483648,"module":"docker"}
 
 use std::path::Path;
 
 use crate::config;
-use crate::tui::widgets::format_size;
 
-/// Append a cleanup operation to the audit log.
-///
-/// Format: `2026-03-03T14:22:01Z TRASH ~/Library/Caches/docker (2.1 GB) [module: docker]`
+/// Append a cleanup operation to the audit log as a JSON line.
 ///
 /// Silently ignores errors — audit logging must never block cleanup.
 pub fn log_operation(op: &str, path: &Path, size: Option<u64>, module_id: &str) {
@@ -39,22 +40,48 @@ fn try_log(op: &str, path: &Path, size: Option<u64>, module_id: &str) -> Option<
 
     // Collapse home prefix for readability
     let display_path = collapse_home(path);
+    let now = now_iso8601();
 
-    let size_str = match size {
-        Some(s) => format!(" ({})", format_size(s)),
+    // Build JSON manually to avoid pulling in serde_json for one call site.
+    let size_field = match size {
+        Some(s) => format!(",\"size\":{s}"),
         None => String::new(),
     };
 
-    let now = now_iso8601();
+    let module_field = if module_id.is_empty() {
+        String::new()
+    } else {
+        format!(",\"module\":\"{}\"", escape_json(module_id))
+    };
 
     writeln!(
         file,
-        "{} {} {}{} [module: {}]",
-        now, op, display_path, size_str, module_id
+        "{{\"timestamp\":\"{now}\",\"operation\":\"{}\",\"path\":\"{}\"{size_field}{module_field}}}",
+        escape_json(op),
+        escape_json(&display_path),
     )
     .ok()?;
 
     Some(())
+}
+
+/// Escape special characters for JSON string values.
+fn escape_json(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Truncate the log file when it exceeds `MAX_LOG_BYTES`, keeping the most
@@ -182,12 +209,11 @@ mod tests {
     }
 
     #[test]
-    fn log_creates_file_and_writes() {
-        // This test uses the real config dir, but just verifies the format function
-        // doesn't panic. The actual file write depends on config_dir() being writable.
-        // We test the formatting logic instead.
-        let ts = now_iso8601();
-        assert!(!ts.is_empty());
+    fn escape_json_special_chars() {
+        assert_eq!(escape_json("hello"), "hello");
+        assert_eq!(escape_json("say \"hi\""), "say \\\"hi\\\"");
+        assert_eq!(escape_json("back\\slash"), "back\\\\slash");
+        assert_eq!(escape_json("new\nline"), "new\\nline");
     }
 
     #[test]
@@ -199,7 +225,7 @@ mod tests {
         let log = tmp.path().join("audit.log");
 
         // Write more than MAX_LOG_BYTES
-        let line = "2026-01-01T00:00:00Z TRASH ~/cache (1 KB) [module: test]\n";
+        let line = "{\"timestamp\":\"2026-01-01T00:00:00Z\",\"operation\":\"trash\",\"path\":\"~/cache\",\"module\":\"test\"}\n";
         let count = (MAX_LOG_BYTES as usize / line.len()) + 100;
         let content: String = line.repeat(count);
         fs::write(&log, &content).unwrap();
@@ -227,7 +253,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let log = tmp.path().join("audit.log");
 
-        let content = "2026-01-01T00:00:00Z TRASH ~/cache (1 KB) [module: test]\n";
+        let content = "{\"timestamp\":\"2026-01-01T00:00:00Z\",\"operation\":\"trash\",\"path\":\"~/cache\",\"module\":\"test\"}\n";
         fs::write(&log, content).unwrap();
 
         rotate_if_needed(&log);
@@ -245,7 +271,6 @@ mod tests {
     #[test]
     fn days_to_ymd_known_date() {
         // 2026-03-03 is day 20515 since epoch
-        // 1970..2025 = 55 years, let's compute: verified via external tool
         let (y, m, d) = days_to_ymd(20515);
         assert_eq!((y, m, d), (2026, 3, 3));
     }

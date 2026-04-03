@@ -24,7 +24,6 @@ pub enum CleanupMessage {
 pub struct CleanupOptions {
     pub dry_run: bool,
     pub protected_paths: Vec<PathBuf>,
-    pub module_id: String,
     pub audit_log: bool,
     /// Whether to enforce that paths must be under $HOME.
     pub enforce_scope: bool,
@@ -37,7 +36,6 @@ impl Default for CleanupOptions {
         Self {
             dry_run: false,
             protected_paths: Vec::new(),
-            module_id: String::new(),
             audit_log: true,
             enforce_scope: true,
             allow_warned: false,
@@ -50,6 +48,10 @@ pub struct CleanupItem {
     pub path: PathBuf,
     /// Glob patterns for files/directories to preserve within this path.
     pub ignore_patterns: Vec<String>,
+    /// The module that owns this item (for audit logging).
+    pub module_id: String,
+    /// Known size of this item in bytes (for audit logging).
+    pub size: Option<u64>,
 }
 
 impl From<PathBuf> for CleanupItem {
@@ -57,6 +59,8 @@ impl From<PathBuf> for CleanupItem {
         Self {
             path,
             ignore_patterns: Vec::new(),
+            module_id: String::new(),
+            size: None,
         }
     }
 }
@@ -97,7 +101,7 @@ pub fn trash_items(
             match trash_dir_filtered(path, &item.ignore_patterns) {
                 Ok(()) => {
                     if opts.audit_log {
-                        audit::log_operation("TRASH", path, None, &opts.module_id);
+                        audit::log_operation("TRASH", path, item.size, &item.module_id);
                     }
                     result.succeeded.push(path.clone());
                 }
@@ -107,7 +111,7 @@ pub fn trash_items(
             match trash::delete(path) {
                 Ok(()) => {
                     if opts.audit_log {
-                        audit::log_operation("TRASH", path, None, &opts.module_id);
+                        audit::log_operation("TRASH", path, item.size, &item.module_id);
                     }
                     result.succeeded.push(path.clone());
                 }
@@ -155,7 +159,7 @@ pub fn delete_items(
             match delete_dir_filtered(path, &item.ignore_patterns) {
                 Ok(()) => {
                     if opts.audit_log {
-                        audit::log_operation("DELETE", path, None, &opts.module_id);
+                        audit::log_operation("DELETE", path, item.size, &item.module_id);
                     }
                     result.succeeded.push(path.clone());
                 }
@@ -173,7 +177,7 @@ pub fn delete_items(
             match res {
                 Ok(()) => {
                     if opts.audit_log {
-                        audit::log_operation("DELETE", path, None, &opts.module_id);
+                        audit::log_operation("DELETE", path, item.size, &item.module_id);
                     }
                     result.succeeded.push(path.clone());
                 }
@@ -538,6 +542,8 @@ mod tests {
         let cleanup_items = vec![CleanupItem {
             path: dir.clone(),
             ignore_patterns: vec!["config.plist".to_string()],
+            module_id: String::new(),
+            size: None,
         }];
 
         let result = delete_items(&cleanup_items, &default_opts(), &no_cancel(), &test_tx());
@@ -565,6 +571,8 @@ mod tests {
         let cleanup_items = vec![CleanupItem {
             path: dir.clone(),
             ignore_patterns: vec!["*.lock".to_string()],
+            module_id: String::new(),
+            size: None,
         }];
 
         let result = delete_items(&cleanup_items, &default_opts(), &no_cancel(), &test_tx());
