@@ -48,6 +48,10 @@ pub struct App {
     pub theme: Theme,
     /// View to return to when leaving an overlay (CleanupConfirm, Help).
     pub previous_view: View,
+    /// Saved selected_index before entering an overlay, restored on exit.
+    pub previous_selected_index: usize,
+    /// Saved view_offset before entering an overlay, restored on exit.
+    pub previous_view_offset: usize,
     /// Whether the application should exit.
     pub should_quit: bool,
     /// Whether the user is currently typing in the filter bar.
@@ -340,6 +344,8 @@ impl App {
             scan_status,
             theme: Theme::default(),
             previous_view: View::ModuleList,
+            previous_selected_index: 0,
+            previous_view_offset: 0,
             should_quit: false,
             filter_active: false,
             filter_query: String::new(),
@@ -404,6 +410,8 @@ impl App {
             scan_status: ScanStatus::Complete,
             theme: Theme::default(),
             previous_view: View::ModuleList,
+            previous_selected_index: 0,
+            previous_view_offset: 0,
             should_quit: false,
             filter_active: false,
             filter_query: String::new(),
@@ -819,6 +827,21 @@ impl App {
     pub(crate) fn set_view(&mut self, view: View) {
         self.current_view = view;
         self.view_offset = 0;
+    }
+
+    /// Enter an overlay (Help, Info) — saves scroll position for later restore.
+    pub(crate) fn enter_overlay(&mut self, view: View) {
+        self.previous_view = self.current_view;
+        self.previous_selected_index = self.selected_index;
+        self.previous_view_offset = self.view_offset;
+        self.current_view = view;
+    }
+
+    /// Leave an overlay — restores the previous view and scroll position.
+    pub(crate) fn leave_overlay(&mut self) {
+        self.current_view = self.previous_view;
+        self.selected_index = self.previous_selected_index;
+        self.view_offset = self.previous_view_offset;
     }
 
     /// Discover and load modules from all configured directories.
@@ -1947,6 +1970,8 @@ impl App {
             scan_status: ScanStatus::Complete,
             theme: Theme::default(),
             previous_view: View::ModuleList,
+            previous_selected_index: 0,
+            previous_view_offset: 0,
             should_quit: false,
             filter_active: false,
             filter_query: String::new(),

@@ -143,8 +143,7 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
                 }
                 // Help
                 KeyCode::Char('?') => {
-                    app.previous_view = View::ModuleInstall;
-                    app.set_view(View::Help);
+                    app.enter_overlay(View::Help);
                 }
                 _ => {}
             }

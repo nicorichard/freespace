@@ -81,8 +81,7 @@ pub fn handle_key(app: &mut App, key: KeyCode, module_idx: usize) {
 
     match key {
         KeyCode::Esc | KeyCode::Char('i') => {
-            app.set_view(app.previous_view);
-            app.selected_index = 0;
+            app.leave_overlay();
         }
         KeyCode::Char('e') => {
             if let Some(manifest_path) = &app.modules[module_idx].manifest_path {

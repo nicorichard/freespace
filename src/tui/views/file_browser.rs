@@ -141,8 +141,7 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
         }
         // Help
         KeyCode::Char('?') => {
-            app.previous_view = app.current_view;
-            app.set_view(View::Help);
+            app.enter_overlay(View::Help);
         }
         // Esc: clear filter → pop drill → return to origin
         KeyCode::Esc => {

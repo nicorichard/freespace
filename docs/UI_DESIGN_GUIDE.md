@@ -78,6 +78,9 @@ for vertical scrolling wherever keyboard up/down is supported.
 - `Enter` drills in (open module, open directory).
 - `Esc` or `Backspace` goes back (close overlay, pop drill level, return to
   parent view).
+- Overlay transitions (Help, Info) **must** use `app.enter_overlay(view)` and
+  `app.leave_overlay()` — these save and restore `selected_index` and
+  `view_offset` so the user never loses their scroll position.
 - `previous_view` tracks what view to return to from overlays (Help, Info).
 - `browser_origin` tracks which view initiated a FileBrowser drill-in.
 
@@ -360,6 +363,7 @@ When adding a new **dialog** (transient overlay or call-to-action), verify:
 
 - [ ] Only the keys relevant to the action are handled
 - [ ] `Esc` dismisses the dialog
-- [ ] View transition uses `self.set_view()`
+- [ ] Overlay entry uses `app.enter_overlay()`, exit uses `app.leave_overlay()` (preserves scroll position)
+- [ ] View transition uses `self.set_view()` only for non-overlay navigation
 - [ ] All colors use `Theme` style methods — no hardcoded colors
 - [ ] Hotkey definitions added to `keybindings.rs` if a status bar is shown

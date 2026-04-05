@@ -147,8 +147,7 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
         }
         // Open help overlay
         KeyCode::Char('?') => {
-            app.previous_view = app.current_view;
-            app.set_view(View::Help);
+            app.enter_overlay(View::Help);
         }
         // Transition to cleanup confirmation if items are selected
         KeyCode::Char('c') => {
@@ -169,8 +168,7 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
         // Open info overlay for the selected module
         KeyCode::Char('i') => {
             if let Some(&module_idx) = sorted.get(app.selected_index) {
-                app.previous_view = app.current_view;
-                app.set_view(View::Info(module_idx));
+                app.enter_overlay(View::Info(module_idx));
             }
         }
         // Switch to flat view

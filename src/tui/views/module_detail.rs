@@ -168,8 +168,7 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
         }
         // Open info overlay for this module
         KeyCode::Char('i') => {
-            app.previous_view = app.current_view;
-            app.set_view(View::Info(module_idx));
+            app.enter_overlay(View::Info(module_idx));
         }
         // Enter filter mode
         KeyCode::Char('/') => {
@@ -197,8 +196,7 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
         }
         // Open help overlay
         KeyCode::Char('?') => {
-            app.previous_view = app.current_view;
-            app.set_view(View::Help);
+            app.enter_overlay(View::Help);
         }
         _ => {}
     }

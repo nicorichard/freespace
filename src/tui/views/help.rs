@@ -16,8 +16,7 @@ use crate::tui::widgets::centered_rect;
 pub fn handle_key(app: &mut App, key: KeyCode) {
     match key {
         KeyCode::Char('?') | KeyCode::Esc => {
-            app.set_view(app.previous_view);
-            app.selected_index = 0;
+            app.leave_overlay();
         }
         _ => {}
     }

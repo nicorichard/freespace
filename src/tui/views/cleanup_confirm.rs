@@ -128,8 +128,7 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
         }
         // Toggle help overlay
         KeyCode::Char('?') => {
-            app.previous_view = app.current_view;
-            app.set_view(crate::app::View::Help);
+            app.enter_overlay(crate::app::View::Help);
         }
         // Enter filter mode
         KeyCode::Char('/') => {
