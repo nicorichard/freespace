@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Modifier;
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
@@ -282,10 +282,14 @@ pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect, module_idx: u
         let groups = grouped_item_indices_for_click(app, module_idx);
         let mut visual_to_nav: Vec<Option<usize>> = Vec::new();
 
+        let col_width = name_column_width(area.width);
         for (group_pos, (_desc, restore, group_indices)) in groups.iter().enumerate() {
             visual_to_nav.push(None); // Header row
-            if restore.is_some() {
-                visual_to_nav.push(None); // Restore hint row
+            if let Some(restore_text) = restore.as_deref() {
+                let line_count = wrap_restore_lines(restore_text, col_width).len();
+                for _ in 0..line_count {
+                    visual_to_nav.push(None); // Restore hint row(s)
+                }
             }
             let group_start = group_boundaries[group_pos];
             for (i, _) in group_indices.iter().enumerate() {
@@ -449,6 +453,52 @@ fn grouped_item_indices(app: &App, module_idx: usize) -> Vec<(Option<String>, Ve
     groups
 }
 
+/// Calculate the effective width of the name column in the items table.
+/// Accounts for borders, highlight symbol, column gaps, and fixed-width columns.
+fn name_column_width(area_width: u16) -> usize {
+    // area_width - 2 (borders) - 2 (highlight symbol "▶ ") - 2 (column gaps) - 5 (checkbox) - 16 (size)
+    (area_width as usize).saturating_sub(27)
+}
+
+/// Wrap restore hint text into multiple lines that fit within the given column width.
+/// Returns lines with a "↳ Restore: " prefix on the first line and aligned indentation on continuations.
+fn wrap_restore_lines(restore: &str, max_width: usize) -> Vec<String> {
+    let prefix = "   \u{21b3} Restore: ";
+    let continuation = "              "; // 14 spaces, aligns with text after "Restore: "
+    let full_text = format!("{}{}", prefix, restore);
+
+    if max_width == 0 || full_text.len() <= max_width {
+        return vec![full_text];
+    }
+
+    let mut lines = Vec::new();
+    let mut remaining = restore;
+    let mut first = true;
+
+    while !remaining.is_empty() {
+        let current_prefix = if first { prefix } else { continuation };
+        let available = max_width.saturating_sub(current_prefix.len());
+
+        if available == 0 || remaining.len() <= available {
+            lines.push(format!("{}{}", current_prefix, remaining));
+            break;
+        }
+
+        let split_at = remaining[..available].rfind(' ').unwrap_or(available);
+
+        if split_at == 0 {
+            lines.push(format!("{}{}", current_prefix, remaining));
+            break;
+        }
+
+        lines.push(format!("{}{}", current_prefix, &remaining[..split_at]));
+        remaining = remaining[split_at..].trim_start();
+        first = false;
+    }
+
+    lines
+}
+
 fn render_items_table(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usize) {
     if app.modules[module_idx].items.is_empty() {
         let msg = match &app.modules[module_idx].status {
@@ -577,17 +627,26 @@ fn render_items_table(app: &mut App, frame: &mut Frame, area: Rect, module_idx: 
                 Cell::from(""),
             ]));
 
-            // Show restore hint if present
+            // Show restore hint if present, wrapped to fit column width
             if let Some(restore) = group_indices
                 .first()
                 .and_then(|&i| items[i].restore_steps.as_deref())
             {
-                let restore_text = format!("   \u{21b3} Restore: {}", restore);
-                rows.push(Row::new(vec![
-                    Cell::from(""),
-                    Cell::from(Span::styled(restore_text, app.theme.style_description())),
-                    Cell::from(""),
-                ]));
+                let col_width = name_column_width(area.width);
+                let wrapped = wrap_restore_lines(restore, col_width);
+                let height = wrapped.len() as u16;
+                let styled_lines: Vec<Line> = wrapped
+                    .into_iter()
+                    .map(|l| Line::from(Span::styled(l, app.theme.style_description())))
+                    .collect();
+                rows.push(
+                    Row::new(vec![
+                        Cell::from(""),
+                        Cell::from(Text::from(styled_lines)),
+                        Cell::from(""),
+                    ])
+                    .height(height),
+                );
             }
 
             let group_start = group_boundaries[group_pos];

@@ -238,6 +238,26 @@ pub fn filtered_confirm_item_count(app: &App) -> usize {
     }
 }
 
+/// Build a mapping from visual row index to item index.
+/// Returns `Some(item_idx)` for item rows, `None` for indicator/restore sub-rows.
+fn visual_row_to_item_index(items: &[ConfirmItem]) -> Vec<Option<usize>> {
+    let mut map = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        map.push(Some(i));
+
+        let has_indicators = item.safety_level == SafetyLevel::Warn
+            || matches!(item.risk_level, RiskLevel::Medium | RiskLevel::High)
+            || item.restore_kind == RestoreKind::Manual;
+        if has_indicators {
+            map.push(None);
+        }
+        if item.restore_steps.is_some() {
+            map.push(None);
+        }
+    }
+    map
+}
+
 /// Handle click events for the cleanup confirmation view.
 pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) -> bool {
     let inner_chunks = Layout::default()
@@ -262,19 +282,30 @@ pub fn handle_click(app: &mut App, col: u16, row: u16, area: Rect) -> bool {
         return false;
     }
 
-    let item_count = filtered_confirm_item_count(app);
+    let items = collect_selected_items(app);
+    let filtered: Vec<_> = if app.filter_query.is_empty() {
+        items
+    } else {
+        items
+            .into_iter()
+            .filter(|item| matches_filter(&item.name, &[], &app.filter_query))
+            .collect()
+    };
+
+    // Build visual-row-to-item-index mapping (None for sub-rows)
+    let row_map = visual_row_to_item_index(&filtered);
     let scroll_offset = app.view_offset;
-    let clicked_pos = scroll_offset + clicked_visual_offset;
-    if clicked_pos < item_count {
+    let clicked_visual_row = scroll_offset + clicked_visual_offset;
+
+    if let Some(&Some(item_idx)) = row_map.get(clicked_visual_row) {
         let on_checkbox = col < table_area.x + 4; // narrower checkbox in confirm view
-        app.selected_index = clicked_pos;
+        app.selected_index = item_idx;
         if on_checkbox {
             app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
         }
-        true
-    } else {
-        false
+        return true;
     }
+    false
 }
 
 /// Render the cleanup confirmation view as a fullscreen view.
@@ -379,76 +410,85 @@ fn render_items_list(app: &mut App, frame: &mut Frame, area: Rect, items: &[Conf
         return;
     }
 
-    let rows: Vec<Row> = items
-        .iter()
-        .map(|item| {
-            let checked = app.confirm_checked.contains(&item.path);
-            let check_cell = Cell::from(Span::styled(
-                if checked { "[x]" } else { "[ ]" },
-                app.theme.style_normal(),
-            ));
+    let mut rows: Vec<Row> = Vec::new();
+    let mut visual_selected: usize = 0;
 
-            let is_warned = item.safety_level == SafetyLevel::Warn;
-            let is_risky = matches!(item.risk_level, RiskLevel::Medium | RiskLevel::High);
-            let is_manual = item.restore_kind == RestoreKind::Manual;
-            let name_style = if is_warned || is_risky {
-                app.theme.style_warning()
-            } else {
-                app.theme.style_normal()
-            };
-            let name_cell = Cell::from(Span::styled(item.name.as_str(), name_style));
+    for (i, item) in items.iter().enumerate() {
+        if i == app.selected_index.min(items.len().saturating_sub(1)) {
+            visual_selected = rows.len();
+        }
 
-            // Show path (truncated if needed)
-            let path_str = item.path.display().to_string();
-            let max_path_len = (area.width as usize).saturating_sub(36);
-            let path_display = if path_str.len() > max_path_len && max_path_len > 3 {
-                format!("...{}", &path_str[path_str.len() - (max_path_len - 3)..])
-            } else {
-                path_str
-            };
-            let path_cell = Cell::from(Span::styled(
-                path_display,
-                Style::default().fg(app.theme.border),
-            ));
+        let checked = app.confirm_checked.contains(&item.path);
+        let check_cell = Cell::from(Span::styled(
+            if checked { "[x]" } else { "[ ]" },
+            app.theme.style_normal(),
+        ));
 
-            let size_cell = Cell::from(Span::styled(
-                format_size_or_placeholder(item.size),
-                app.theme.style_size(),
-            ));
+        let is_warned = item.safety_level == SafetyLevel::Warn;
+        let is_risky = matches!(item.risk_level, RiskLevel::Medium | RiskLevel::High);
+        let is_manual = item.restore_kind == RestoreKind::Manual;
+        let name_style = if is_warned || is_risky {
+            app.theme.style_warning()
+        } else {
+            app.theme.style_normal()
+        };
 
-            let mut parts: Vec<String> = Vec::new();
-            if is_warned {
-                parts.push("[!]".to_string());
-            }
-            if is_risky {
-                parts.push(format!("[{} risk]", item.risk_level));
-            }
-            if is_manual {
-                parts.push("[manual restore]".to_string());
-            }
-            let indicator = parts.join(" ");
-            let safety_cell = if !indicator.is_empty() {
-                Cell::from(Span::styled(indicator, app.theme.style_warning()))
-            } else {
-                Cell::from("")
-            };
+        // Combine name and path into one expanding cell
+        let path_str = item.path.display().to_string();
+        let max_path_len = (area.width as usize).saturating_sub(19 + item.name.len());
+        let path_display = if path_str.len() > max_path_len && max_path_len > 3 {
+            format!("...{}", &path_str[path_str.len() - (max_path_len - 3)..])
+        } else {
+            path_str
+        };
+        let content_cell = Cell::from(Line::from(vec![
+            Span::styled(item.name.as_str(), name_style),
+            Span::raw("  "),
+            Span::styled(path_display, Style::default().fg(app.theme.border)),
+        ]));
 
-            Row::new(vec![
-                check_cell,
-                name_cell,
-                path_cell,
-                size_cell,
-                safety_cell,
-            ])
-        })
-        .collect();
+        let size_cell = Cell::from(Span::styled(
+            format_size_or_placeholder(item.size),
+            app.theme.style_size(),
+        ));
+
+        rows.push(Row::new(vec![check_cell, content_cell, size_cell]));
+
+        // Add indicator sub-line beneath the item if needed
+        let mut parts: Vec<String> = Vec::new();
+        if is_warned {
+            parts.push("[!]".to_string());
+        }
+        if is_risky {
+            parts.push(format!("[{} risk]", item.risk_level));
+        }
+        if is_manual {
+            parts.push("[manual restore]".to_string());
+        }
+        if !parts.is_empty() {
+            let indicator_text = format!("   \u{2014} {}", parts.join(" "));
+            rows.push(Row::new(vec![
+                Cell::from(""),
+                Cell::from(Span::styled(indicator_text, app.theme.style_warning())),
+                Cell::from(""),
+            ]));
+        }
+
+        // Add restore steps sub-line if present
+        if let Some(restore) = &item.restore_steps {
+            let restore_text = format!("   \u{21b3} Restore: {}", restore);
+            rows.push(Row::new(vec![
+                Cell::from(""),
+                Cell::from(Span::styled(restore_text, app.theme.style_description())),
+                Cell::from(""),
+            ]));
+        }
+    }
 
     let widths = [
         Constraint::Length(3),  // Check
-        Constraint::Length(20), // Name
-        Constraint::Min(20),    // Path
+        Constraint::Min(20),    // Content (name + path, or sub-line text)
         Constraint::Length(12), // Size
-        Constraint::Length(10), // Safety
     ];
 
     let table = Table::new(rows, widths)
@@ -460,10 +500,10 @@ fn render_items_list(app: &mut App, frame: &mut Frame, area: Rect, items: &[Conf
         .style(app.theme.style_normal())
         .row_highlight_style(app.theme.style_selected());
 
-    // Scroll the table based on selected_index
+    // Scroll the table based on selected_index (mapped to visual row)
     let mut state = TableState::default();
     *state.offset_mut() = app.view_offset;
-    state.select(Some(app.selected_index.min(items.len().saturating_sub(1))));
+    state.select(Some(visual_selected));
     frame.render_stateful_widget(table, area, &mut state);
     app.view_offset = state.offset();
 }
