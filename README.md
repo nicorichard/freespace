@@ -2,6 +2,8 @@
 
 Your disk fills up with caches, build artifacts, and leftovers from dozens of dev tools. Each has its own cleanup dance. Freespace gives you a single TUI to reclaim that space — powered by community-written cleanup modules.
 
+![freespace demo](docs/demo.gif)
+
 ## Install
 
 ### With [Homebrew](https://brew.sh)
