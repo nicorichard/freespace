@@ -2,7 +2,26 @@
 
 Your disk fills up with caches, build artifacts, and leftovers from dozens of dev tools. Each has its own cleanup dance. Freespace gives you a single TUI to reclaim that space — powered by community-written cleanup modules.
 
-![freespace demo](docs/demo.gif)
+## Install
+
+### With [Homebrew](https://brew.sh)
+
+```sh
+brew install nicorichard/tap/freespace
+```
+
+### With [mise](https://mise.jdx.dev)
+
+```sh
+mise use -g github:nicorichard/freespace@latest
+```
+
+### From source
+
+```sh
+cargo build --release
+# Binary at target/release/freespace
+```
 
 ## Why Freespace
 
@@ -33,27 +52,6 @@ That's it. No scripts, no plugins — just a declaration of where disk space hid
 ## Heads up
 
 Freespace deletes files. We require confirmation before any cleanup, but please review what you're removing and keep backups of anything important. Use at your own risk — see the MIT license for details.
-
-## Install
-
-### With [Homebrew](https://brew.sh)
-
-```sh
-brew install nicorichard/tap/freespace
-```
-
-### With [mise](https://mise.jdx.dev)
-
-```sh
-mise use -g github:nicorichard/freespace@latest
-```
-
-### From source
-
-```sh
-cargo build --release
-# Binary at target/release/freespace
-```
 
 ## Configuration
 
