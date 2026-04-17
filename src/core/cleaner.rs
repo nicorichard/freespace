@@ -292,7 +292,7 @@ mod tests {
         assert!(file.exists());
 
         let result = delete_items(
-            &items(&[file.clone()]),
+            &items(std::slice::from_ref(&file)),
             &default_opts(),
             &no_cancel(),
             &test_tx(),
@@ -310,7 +310,7 @@ mod tests {
         fs::write(dir.join("inner.txt"), "data").unwrap();
 
         let result = delete_items(
-            &items(&[dir.clone()]),
+            &items(std::slice::from_ref(&dir)),
             &default_opts(),
             &no_cancel(),
             &test_tx(),
@@ -355,7 +355,7 @@ mod tests {
         fs::write(&file, "data").unwrap();
 
         let result = trash_items(
-            &items(&[file.clone()]),
+            &items(std::slice::from_ref(&file)),
             &default_opts(),
             &no_cancel(),
             &test_tx(),
@@ -389,7 +389,12 @@ mod tests {
             enforce_scope: false,
             ..CleanupOptions::default()
         };
-        let result = delete_items(&items(&[file.clone()]), &opts, &no_cancel(), &test_tx());
+        let result = delete_items(
+            &items(std::slice::from_ref(&file)),
+            &opts,
+            &no_cancel(),
+            &test_tx(),
+        );
         assert_eq!(result.succeeded.len(), 1);
         assert!(file.exists(), "file should still exist in dry-run mode");
     }
@@ -406,7 +411,12 @@ mod tests {
             enforce_scope: false,
             ..CleanupOptions::default()
         };
-        let result = trash_items(&items(&[file.clone()]), &opts, &no_cancel(), &test_tx());
+        let result = trash_items(
+            &items(std::slice::from_ref(&file)),
+            &opts,
+            &no_cancel(),
+            &test_tx(),
+        );
         assert_eq!(result.succeeded.len(), 1);
         assert!(file.exists(), "file should still exist in dry-run mode");
     }
@@ -423,7 +433,12 @@ mod tests {
             enforce_scope: false,
             ..CleanupOptions::default()
         };
-        let result = delete_items(&items(&[file.clone()]), &opts, &no_cancel(), &test_tx());
+        let result = delete_items(
+            &items(std::slice::from_ref(&file)),
+            &opts,
+            &no_cancel(),
+            &test_tx(),
+        );
         assert!(result.succeeded.is_empty());
         assert_eq!(result.failed.len(), 1);
         assert!(result.failed[0].1.contains("blocked by safety rule"));
@@ -442,7 +457,7 @@ mod tests {
         std::os::unix::fs::symlink(&target_dir, &link).unwrap();
 
         let result = delete_items(
-            &items(&[link.clone()]),
+            &items(std::slice::from_ref(&link)),
             &default_opts(),
             &no_cancel(),
             &test_tx(),

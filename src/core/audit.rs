@@ -220,7 +220,7 @@ mod tests {
     }
 
     /// Helper: extract a JSON string value by key from a JSON line.
-    fn json_str<'a>(json: &'a str, key: &str) -> Option<String> {
+    fn json_str(json: &str, key: &str) -> Option<String> {
         let needle = format!("\"{}\":\"", key);
         let start = json.find(&needle)? + needle.len();
         let rest = &json[start..];
@@ -244,9 +244,7 @@ mod tests {
         let needle = format!("\"{}\":", key);
         let start = json.find(&needle)? + needle.len();
         let rest = &json[start..];
-        let end = rest
-            .find(|c: char| c == ',' || c == '}')
-            .unwrap_or(rest.len());
+        let end = rest.find([',', '}']).unwrap_or(rest.len());
         rest[..end].trim().parse().ok()
     }
 
