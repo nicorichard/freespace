@@ -106,8 +106,8 @@ enum ModuleCommand {
         /// ID of the built-in module to re-enable
         id: String,
     },
-    /// Remove installed modules that are now built in
-    PruneVendored,
+    /// Remove installed modules that duplicate a built-in
+    Prune,
 }
 
 #[tokio::main]
@@ -242,8 +242,8 @@ async fn main() -> anyhow::Result<()> {
                 ModuleCommand::Outdated => {
                     cmd_outdated(&modules_dir);
                 }
-                ModuleCommand::PruneVendored => {
-                    cmd_prune_vendored(&modules_dir)?;
+                ModuleCommand::Prune => {
+                    cmd_prune(&modules_dir)?;
                 }
                 ModuleCommand::Validate { .. }
                 | ModuleCommand::Disable { .. }
@@ -371,8 +371,8 @@ fn cmd_set_builtin_enabled(id: &str, enable: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Remove installed modules that the built-in catalog now supersedes.
-fn cmd_prune_vendored(modules_dir: &std::path::Path) -> anyhow::Result<()> {
+/// Remove installed modules that duplicate one the catalog already ships.
+fn cmd_prune(modules_dir: &std::path::Path) -> anyhow::Result<()> {
     let builtin_ids = module::catalog::catalog_ids();
     let mut removed = Vec::new();
 
@@ -392,11 +392,11 @@ fn cmd_prune_vendored(modules_dir: &std::path::Path) -> anyhow::Result<()> {
         let Some(source) = module::installer::read_source_info(&dir) else {
             continue;
         };
-        if source.repository != config::COMMUNITY_MODULES_SOURCE {
+        if source.repository != config::CATALOG_SOURCE_REPO {
             continue;
         }
-        // Only prune when the catalog genuinely replaces it, so a module that
-        // was dropped from the catalog is left alone rather than silently lost.
+        // Only prune when a built-in genuinely covers it, so a module the
+        // catalog does not ship is left alone rather than silently lost.
         let Ok(manifest) = fs::read_to_string(dir.join("module.toml")) else {
             continue;
         };
@@ -412,10 +412,10 @@ fn cmd_prune_vendored(modules_dir: &std::path::Path) -> anyhow::Result<()> {
     }
 
     if removed.is_empty() {
-        println!("Nothing to prune — no installed modules are superseded by built-ins.");
+        println!("Nothing to prune — no installed modules duplicate a built-in.");
     } else {
         removed.sort();
-        println!("Removed {} superseded module(s):", removed.len());
+        println!("Removed {} duplicate module(s):", removed.len());
         for id in &removed {
             println!("  {}", id);
         }
@@ -475,7 +475,7 @@ fn cmd_inspect(modules_dir: &std::path::Path, id: &str) -> anyhow::Result<()> {
     if module_dir.is_none() {
         println!();
         println!("Source:");
-        println!("  Built in to freespace (no install required)");
+        println!("  Built in to freespace");
         let cfg = config::AppConfig::load().unwrap_or_default();
         if cfg.modules.is_disabled(&module.id) {
             println!(

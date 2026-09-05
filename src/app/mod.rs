@@ -314,7 +314,7 @@ impl App {
         dry_run: bool,
         directory_mode: bool,
     ) -> Self {
-        let (modules, search_dirs, config, superseded) =
+        let (modules, search_dirs, config) =
             Self::load_modules_and_config(cli_module_dirs, cli_search_dirs, directory_mode);
 
         let protected_paths = safety::expand_protected_paths(&config.protected_paths);
@@ -339,7 +339,7 @@ impl App {
         // Spawn background update checks for git-sourced modules
         let update_check_rx = spawn_update_checks(&modules);
 
-        let mut app = Self {
+        Self {
             modules,
             current_view: View::ModuleList,
             selected_index: 0,
@@ -398,24 +398,7 @@ impl App {
             install_mode: false,
             stats: stats::Stats::load(),
             cleanup_item_meta: HashMap::new(),
-        };
-
-        // Modules that used to be installed from the community repo are now
-        // vendored, so the installed copies are dead weight. Say so once rather
-        // than deleting anything on the user's behalf.
-        if !superseded.is_empty() {
-            app.set_flash(
-                format!(
-                    "{} installed module{} now built in — run `freespace module prune-vendored` to remove {}",
-                    superseded.len(),
-                    if superseded.len() == 1 { "" } else { "s" },
-                    if superseded.len() == 1 { "it" } else { "them" },
-                ),
-                FlashLevel::Info,
-            );
         }
-
-        app
     }
 
     /// Create a new App in install-only mode: no scanning, just the install picker.
@@ -790,7 +773,7 @@ impl App {
     /// Used after anything that changes which modules apply: installing,
     /// removing, or enabling/disabling a built-in.
     pub(crate) fn reload_modules(&mut self) {
-        let (modules, search_dirs, config, _superseded) =
+        let (modules, search_dirs, config) =
             Self::load_modules_and_config(Vec::new(), Vec::new(), false);
         self.modules = modules;
         self.protected_paths = safety::expand_protected_paths(&config.protected_paths);
@@ -895,13 +878,12 @@ impl App {
     /// Discover and load modules from the built-in catalog and all configured
     /// directories.
     ///
-    /// Returns module states, expanded search_dirs paths, the loaded config, and
-    /// the ids of installed modules the catalog now supersedes.
+    /// Returns module states, expanded search_dirs paths, and the loaded config.
     fn load_modules_and_config(
         cli_module_dirs: Vec<String>,
         cli_search_dirs: Vec<String>,
         directory_mode: bool,
-    ) -> (Vec<ModuleState>, Vec<PathBuf>, AppConfig, Vec<String>) {
+    ) -> (Vec<ModuleState>, Vec<PathBuf>, AppConfig) {
         // Load config file (warnings on failure, use defaults)
         let config = match AppConfig::load() {
             Ok(config) => config,
@@ -939,8 +921,6 @@ impl App {
             eprintln!("warning: {}", warning);
         }
 
-        let superseded = loaded.superseded;
-
         let module_states: Vec<ModuleState> = loaded
             .modules
             .into_iter()
@@ -971,7 +951,7 @@ impl App {
             })
             .collect();
 
-        (module_states, search_dirs, config, superseded)
+        (module_states, search_dirs, config)
     }
 
     /// Run the main event loop: poll input -> update state -> render.

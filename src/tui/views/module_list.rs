@@ -37,19 +37,6 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
         return;
     }
 
-    // When no modules are installed, [i] triggers community module install
-    if app.modules.is_empty() && key == KeyCode::Char('i') {
-        if let Some(modules_dir) = crate::config::default_modules_dir() {
-            let _ = std::fs::create_dir_all(&modules_dir);
-            app.start_module_install(
-                crate::config::COMMUNITY_MODULES_SOURCE.to_string(),
-                modules_dir,
-                false,
-            );
-        }
-        return;
-    }
-
     let sorted = sorted_module_indices(app);
     let count = sorted.len();
 
@@ -497,17 +484,13 @@ fn render_module_table(app: &mut App, frame: &mut Frame, area: Rect) {
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  Re-enable one with: freespace module enable <id>",
+                "  Re-enable one with:  freespace module enable <id>",
                 app.theme.style_description(),
             )),
-            Line::from(vec![
-                Span::styled("  Press ", app.theme.style_description()),
-                Span::styled("[i]", app.theme.style_size()),
-                Span::styled(
-                    " to install additional modules from a repository",
-                    app.theme.style_description(),
-                ),
-            ]),
+            Line::from(Span::styled(
+                "  List what exists:    freespace module list",
+                app.theme.style_description(),
+            )),
         ];
         let content = Paragraph::new(lines).block(
             Block::default()

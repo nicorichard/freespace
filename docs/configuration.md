@@ -113,4 +113,4 @@ enforce_scope = true
 - The `dry_run` mode is controlled via the `--dry-run` CLI flag, not the config file.
 - The config directory is always `~/.config/freespace/`, regardless of platform.
 - Modules are loaded from the built-in catalog first, then `~/.config/freespace/modules/`, then any paths listed in `module_dirs`. A user module replaces a built-in with the same `id`.
-- If you previously installed `github:nicorichard/freespace-modules`, those modules are now built in. The installed copies are ignored in favour of the built-ins; remove them with `freespace module prune-vendored`.
+- An installed module that duplicates a built-in is ignored in favour of the built-in. `freespace module prune` removes such duplicates from disk.

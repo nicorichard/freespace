@@ -27,7 +27,7 @@ cargo build --release
 
 ## Why Freespace
 
-**Complete out of the box** — Ships knowing about 50+ tools: Docker, Xcode, npm, Homebrew, Gradle, Steam, and the rest. No install step, no separate module repo to clone.
+**Complete out of the box** — Ships knowing about 50+ tools: Docker, Xcode, npm, Homebrew, Gradle, Steam, and the rest. No install step.
 
 **Declarative & safe** — Modules are plain TOML manifests. A manifest declares paths, or names one of freespace's built-in handlers; it can never specify a command of its own. You can read and audit every module in seconds.
 

@@ -8,10 +8,6 @@ use crate::config::ModulesConfig;
 use crate::module::catalog;
 use crate::module::manifest::Module;
 
-/// The community modules repository whose contents are now vendored into the
-/// binary. Installed copies from this repo are superseded by the catalog.
-const VENDORED_REPO: &str = crate::config::COMMUNITY_MODULES_SOURCE;
-
 /// Where a loaded module came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModuleOrigin {
@@ -34,21 +30,17 @@ pub struct LoadedModule {
 pub struct LoadResult {
     pub modules: Vec<LoadedModule>,
     pub warnings: Vec<String>,
-    /// Ids of installed modules that were skipped because the catalog now
-    /// ships the same module. These are leftovers from before the catalog was
-    /// vendored and can be pruned.
-    pub superseded: Vec<String>,
 }
 
 /// Load modules from the built-in catalog and all configured directories.
 ///
-/// Sources, in order: the vendored catalog, the default modules directory
+/// Sources, in order: the built-in catalog, the default modules directory
 /// (created if missing), then each extra directory from config and CLI flags.
 ///
 /// A user module whose id matches a built-in **replaces** the built-in, so a
 /// catalog entry can be overridden locally. The exception is an installed copy
-/// of the now-vendored community repo: those are skipped as stale duplicates
-/// and reported in [`LoadResult::superseded`].
+/// from [`CATALOG_REPO`], which duplicates a built-in rather than customising
+/// it; there the built-in wins, so a stale copy cannot shadow a fixed one.
 pub fn load_all_modules(
     default_dir: Option<PathBuf>,
     extra_dirs: &[String],
@@ -104,15 +96,12 @@ pub fn load_all_modules(
     }
 
     // 3. Reconcile against the catalog
-    let mut superseded = Vec::new();
     let mut overridden_ids = Vec::new();
     let mut kept_user = Vec::new();
 
     for (module, manifest_path) in user {
         let clashes = builtin.iter().any(|b| b.module.id == module.id);
-        if clashes && is_vendored_copy(&manifest_path) {
-            // A leftover install of the repo we now vendor — prefer the built-in.
-            superseded.push(module.id.clone());
+        if clashes && is_catalog_duplicate(&manifest_path) {
             continue;
         }
         if clashes {
@@ -131,18 +120,17 @@ pub fn load_all_modules(
     LoadResult {
         modules: builtin,
         warnings: all_warnings,
-        superseded,
     }
 }
 
-/// Whether an installed module came from the community repo that is now
-/// vendored into the binary.
-fn is_vendored_copy(manifest_path: &Path) -> bool {
+/// Whether an installed module is a copy of one the catalog already ships,
+/// rather than a deliberate local override.
+fn is_catalog_duplicate(manifest_path: &Path) -> bool {
     let Some(module_dir) = manifest_path.parent() else {
         return false;
     };
     crate::module::installer::read_source_info(module_dir)
-        .is_some_and(|info| info.repository == VENDORED_REPO)
+        .is_some_and(|info| info.repository == crate::config::CATALOG_SOURCE_REPO)
 }
 
 /// Expand a leading `~` or `~/` to the user's home directory.
@@ -305,9 +293,9 @@ path = "~/test"
         assert!(warnings.is_empty());
     }
 
-    /// Write an installed module that claims to have come from the repo whose
-    /// contents are now vendored.
-    fn write_vendored_copy(dir: &Path, id: &str) {
+    /// Write an installed module claiming to come from the repo the catalog
+    /// also ships.
+    fn write_catalog_duplicate(dir: &Path, id: &str) {
         let module_dir = dir.join(id);
         fs::create_dir_all(&module_dir).unwrap();
         fs::write(
@@ -332,7 +320,7 @@ path = "~/test"
             module_dir.join("source.toml"),
             format!(
                 "[source]\nrepository = \"{}\"\ncommit = \"abc\"\ninstalled_at = 0\n",
-                VENDORED_REPO
+                crate::config::CATALOG_SOURCE_REPO
             ),
         )
         .unwrap();
@@ -367,14 +355,14 @@ path = "~/test"
         assert!(loaded.modules.is_empty());
     }
 
-    /// A leftover install from the now-vendored repo must not double up with
-    /// the built-in; the built-in wins and the copy is reported as prunable.
+    /// An installed copy of a module the catalog ships must not double up with
+    /// the built-in, and the built-in must win so a stale copy cannot shadow it.
     #[test]
-    fn installed_copy_of_a_vendored_module_is_superseded() {
+    fn installed_duplicate_loses_to_the_builtin() {
         let tmp = tempfile::TempDir::new().unwrap();
         let (builtins, _) = crate::module::catalog::load_catalog(&[]);
         let id = builtins[0].id.clone();
-        write_vendored_copy(tmp.path(), &id);
+        write_catalog_duplicate(tmp.path(), &id);
 
         let loaded = load_all_modules(Some(tmp.path().to_path_buf()), &[], &catalog_enabled());
 
@@ -385,7 +373,6 @@ path = "~/test"
             .collect();
         assert_eq!(matching.len(), 1, "exactly one module should win");
         assert_eq!(matching[0].origin, ModuleOrigin::Builtin);
-        assert_eq!(loaded.superseded, vec![id]);
     }
 
     /// A hand-written module with no source.toml is a deliberate local override
@@ -407,7 +394,6 @@ path = "~/test"
             .collect();
         assert_eq!(matching.len(), 1);
         assert_eq!(matching[0].origin, ModuleOrigin::User);
-        assert!(loaded.superseded.is_empty());
     }
 
     #[test]

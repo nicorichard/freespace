@@ -2,8 +2,10 @@
 
 use std::path::PathBuf;
 
-/// Default community modules source for first-run installation.
-pub const COMMUNITY_MODULES_SOURCE: &str = "github:nicorichard/freespace-modules";
+/// Upstream repository the built-in catalog is sourced from. Used to recognise
+/// an installed module as a duplicate of a built-in rather than a deliberate
+/// local override.
+pub const CATALOG_SOURCE_REPO: &str = "github:nicorichard/freespace-modules";
 
 use serde::{Deserialize, Serialize};
 
