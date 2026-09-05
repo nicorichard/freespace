@@ -1,0 +1,19 @@
+id = "telegram"
+name = "Telegram Caches"
+version = "1.0.0"
+description = "Telegram downloaded media and caches. Media can grow to 100+ GB."
+author = "freespace"
+platforms = ["macos"]
+icon = ""
+
+[[targets]]
+path = "~/Library/Group Containers/*.keepcoder.Telegram/*/postbox/media"
+description = "Telegram downloaded media files"
+risk = "low"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Caches/ru.keepcoder.Telegram"
+description = "Telegram general cache"
+risk = "safe"
+restore = "auto"

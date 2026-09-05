@@ -1,0 +1,20 @@
+id = "swift-pm"
+name = "Swift Package Manager Cache"
+version = "1.0.0"
+description = "Swift Package Manager build and repository cache"
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+icon_color = "#F05138"
+
+[[targets]]
+path = "~/.cache/org.swift.swiftpm"
+description = "Swift PM repository and manifest cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Caches/org.swift.swiftpm"
+description = "Swift PM security and collections data (macOS)"
+risk = "safe"
+restore = "auto"

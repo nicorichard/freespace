@@ -1,0 +1,38 @@
+id = "haskell"
+name = "Haskell Caches"
+version = "1.0.0"
+description = "Stack, Cabal, and GHC caches and project-local build artifacts."
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+icon_color = "#5D4F85"
+
+[[targets]]
+path = "~/.stack"
+description = "Stack package database and snapshots"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.cabal"
+description = "Cabal package store and download cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.ghc"
+description = "GHC compiler caches and settings"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.stack-work"
+description = "Stack project-local build output"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/dist-newstyle"
+description = "Cabal new-build output"
+risk = "safe"
+restore = "auto"

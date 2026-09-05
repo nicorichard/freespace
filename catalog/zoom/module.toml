@@ -1,0 +1,18 @@
+id = "zoom"
+name = "Zoom Caches"
+version = "1.0.0"
+description = "Zoom client cached data and update downloads."
+author = "freespace"
+platforms = ["macos"]
+
+[[targets]]
+path = "~/Library/Application Support/zoom.us/data"
+description = "Zoom cached meeting data"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/zoom.us/AutoUpdater"
+description = "Zoom update downloads"
+risk = "safe"
+restore = "auto"

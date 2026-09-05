@@ -1,0 +1,39 @@
+id = "android-dev"
+name = "Android Development Caches"
+version = "1.0.0"
+description = "Android SDK caches, build caches, and emulator system images."
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+icon_color = "#3DDC84"
+
+[[targets]]
+path = "~/.android/cache"
+description = "Android SDK manager cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.android/build-cache"
+description = "Android build cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Android/sdk/system-images"
+description = "Android emulator system images (macOS)"
+risk = "low"
+restore = "manual"
+restore_steps = "Re-download via Android SDK Manager"
+
+[[targets]]
+path = "~/Library/Android/sdk/.temp"
+description = "Temporary SDK download files"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Android/sdk/.downloadIntermediates"
+description = "Intermediate SDK downloads"
+risk = "safe"
+restore = "auto"

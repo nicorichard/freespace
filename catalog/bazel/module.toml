@@ -1,0 +1,18 @@
+id = "bazel"
+name = "Bazel Build Cache"
+version = "1.0.0"
+description = "Bazel build system global caches."
+author = "freespace"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "~/.cache/bazel"
+description = "Bazel build cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.bazel/cache"
+description = "Bazel output and remote cache"
+risk = "safe"
+restore = "auto"

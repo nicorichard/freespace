@@ -483,22 +483,31 @@ fn render_module_table(app: &mut App, frame: &mut Frame, area: Rect) {
         let lines = vec![
             Line::from(""),
             Line::from(Span::styled(
-                "  No modules installed.",
+                "  No modules to show.",
                 app.theme.style_normal(),
             )),
             Line::from(""),
+            Line::from(Span::styled(
+                "  freespace ships with built-in modules, so this usually means",
+                app.theme.style_description(),
+            )),
+            Line::from(Span::styled(
+                "  they were disabled in ~/.config/freespace/config.toml.",
+                app.theme.style_description(),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Re-enable one with: freespace module enable <id>",
+                app.theme.style_description(),
+            )),
             Line::from(vec![
                 Span::styled("  Press ", app.theme.style_description()),
                 Span::styled("[i]", app.theme.style_size()),
                 Span::styled(
-                    " to install community modules",
+                    " to install additional modules from a repository",
                     app.theme.style_description(),
                 ),
             ]),
-            Line::from(Span::styled(
-                "  or run: freespace module install <source>",
-                app.theme.style_description(),
-            )),
         ];
         let content = Paragraph::new(lines).block(
             Block::default()
@@ -731,7 +740,7 @@ mod tests {
             icon: None,
             icon_color: None,
             targets: vec![Target {
-                paths: vec!["~/test".to_string()],
+                source: crate::module::manifest::TargetSource::Paths(vec!["~/test".to_string()]),
                 description: None,
                 restore: crate::module::manifest::RestoreKind::default(),
                 restore_steps: None,
@@ -753,9 +762,11 @@ mod tests {
                 restore_steps: None,
                 risk_level: crate::module::manifest::RiskLevel::default(),
                 ignore_patterns: vec![],
+                ..Default::default()
             }],
             total_size: Some(size),
             status: ModuleStatus::Ready,
+            origin: crate::module::manager::ModuleOrigin::User,
             manifest_path: None,
             update_status: None,
         }
@@ -775,7 +786,7 @@ mod tests {
                 icon: None,
                 icon_color: None,
                 targets: vec![Target {
-                    paths: vec!["~/x".to_string()],
+                    source: crate::module::manifest::TargetSource::Paths(vec!["~/x".to_string()]),
                     description: None,
                     restore: crate::module::manifest::RestoreKind::default(),
                     restore_steps: None,
@@ -786,6 +797,7 @@ mod tests {
             items: vec![],
             total_size: Some(0),
             status: ModuleStatus::Ready,
+            origin: crate::module::manager::ModuleOrigin::User,
             manifest_path: None,
             update_status: None,
         };

@@ -29,9 +29,10 @@ static CANONICAL_WARN_PATHS: LazyLock<Vec<(String, PathBuf)>> = LazyLock::new(||
 });
 
 /// Safety classification for a filesystem path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SafetyLevel {
     /// Path is safe to operate on.
+    #[default]
     Safe,
     /// Path is in a sensitive location — user should be warned but can proceed.
     Warn,

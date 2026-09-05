@@ -1,0 +1,49 @@
+id = "browser"
+name = "Browser Caches"
+version = "1.0.0"
+description = "Browser-specific caches stored outside ~/Library/Caches."
+author = "freespace"
+platforms = ["macos"]
+icon = ""
+
+[[targets]]
+path = "~/Library/Application Support/Google/Chrome/Default/Service Worker/CacheStorage"
+description = "Chrome service worker caches"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Google/Chrome/Default/GPUCache"
+description = "Chrome GPU shader cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Google/Chrome/ShaderCache"
+description = "Chrome shader cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Google/Chrome/Crashpad"
+description = "Chrome crash reporter data"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Arc/User Data/Default/Cache"
+description = "Arc browser cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Arc/User Data/Default/Code Cache"
+description = "Arc browser code cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Arc/User Data/Default/GPUCache"
+description = "Arc browser GPU cache"
+risk = "safe"
+restore = "auto"

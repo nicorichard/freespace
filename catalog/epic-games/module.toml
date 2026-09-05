@@ -1,0 +1,12 @@
+id = "epic-games"
+name = "Epic Games Caches"
+version = "1.0.0"
+description = "Epic Games Launcher saved data and caches."
+author = "freespace"
+platforms = ["macos"]
+
+[[targets]]
+path = "~/Library/Application Support/Epic/EpicGamesLauncher/Saved"
+description = "Epic Games Launcher saved data and cache"
+risk = "safe"
+restore = "auto"

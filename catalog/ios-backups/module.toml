@@ -1,0 +1,14 @@
+id = "ios-backups"
+name = "iOS Device Backups"
+version = "1.0.0"
+description = "Local iOS/iPadOS device backups."
+author = "freespace"
+platforms = ["macos"]
+icon = ""
+
+[[targets]]
+path = "~/Library/Application Support/MobileSync/Backup/*"
+description = "iTunes/Finder device backups (can be tens of GB each)"
+risk = "high"
+restore = "manual"
+restore_steps = "Cannot be restored — ensure iCloud backup is enabled before deleting"

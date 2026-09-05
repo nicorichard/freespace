@@ -1,0 +1,32 @@
+id = "go-cache"
+name = "Go Caches"
+version = "1.0.0"
+description = "Go module downloads and build cache."
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+icon_color = "#00ADD8"
+
+[[targets]]
+path = "~/go/pkg/mod/cache"
+description = "Go module download cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Caches/go-build"
+description = "Go build cache (macOS)"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.cache/go-build"
+description = "Go build cache (Linux)"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/go/pkg/mod"
+description = "Go module source cache"
+risk = "low"
+restore = "auto"

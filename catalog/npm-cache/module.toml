@@ -1,0 +1,26 @@
+id = "npm-cache"
+name = "Node Package Caches"
+version = "1.0.0"
+description = "Cached packages from npm, Yarn, and pnpm"
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+icon_color = "#339933"
+
+[[targets]]
+path = "~/.npm/_cacache"
+description = "npm download cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.yarn/cache"
+description = "Yarn berry cache directory"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.local/share/pnpm/store"
+description = "pnpm content-addressable store"
+risk = "safe"
+restore = "auto"

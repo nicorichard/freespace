@@ -95,11 +95,9 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
         KeyCode::Char('n') => {
             app.confirm_checked.clear();
         }
-        // Move to trash (reversible)
+        // Move to trash (reversible where possible)
         KeyCode::Char('t') => {
-            if !app.confirm_checked.is_empty() {
-                app.start_cleanup(false);
-            }
+            app.request_trash();
         }
         // Permanently delete
         KeyCode::Char('d') => {
@@ -169,6 +167,22 @@ pub struct ConfirmItem {
     pub restore_kind: RestoreKind,
     pub restore_steps: Option<String>,
     pub risk_level: RiskLevel,
+    /// The exact command that will run, for handler-backed items. Showing this
+    /// verbatim before the user confirms is the whole point: what is displayed
+    /// here is what gets executed.
+    pub removal_command: Option<String>,
+    /// Whether removal can be undone. Handler items cannot be trashed.
+    pub reversible: bool,
+    /// Real filesystem location for handler items, whose own `path` is a
+    /// synthetic identity that would be meaningless on screen.
+    pub display_path: Option<PathBuf>,
+}
+
+impl ConfirmItem {
+    /// The location to show in the item list.
+    fn shown_path(&self) -> &std::path::Path {
+        self.display_path.as_deref().unwrap_or(&self.path)
+    }
 }
 
 /// Collect selected items across all modules into a flat list.
@@ -191,6 +205,9 @@ pub fn collect_selected_items(app: &App) -> Vec<ConfirmItem> {
                     restore_kind: item.restore_kind,
                     restore_steps: item.restore_steps.clone(),
                     risk_level: item.risk_level,
+                    removal_command: item.action.removal_command(),
+                    reversible: item.reversible(),
+                    display_path: item.display_path.clone(),
                 });
             }
         }
@@ -215,6 +232,10 @@ pub fn collect_selected_items(app: &App) -> Vec<ConfirmItem> {
                 restore_kind: RestoreKind::default(),
                 restore_steps: None,
                 risk_level: RiskLevel::default(),
+                // Drill-in selections are always real paths.
+                removal_command: None,
+                reversible: true,
+                display_path: None,
             });
         }
     }
@@ -252,6 +273,9 @@ fn visual_row_to_item_index(items: &[ConfirmItem]) -> Vec<Option<usize>> {
             map.push(None);
         }
         if item.restore_steps.is_some() {
+            map.push(None);
+        }
+        if item.removal_command.is_some() {
             map.push(None);
         }
     }
@@ -340,6 +364,10 @@ pub fn render(app: &mut App, frame: &mut Frame) {
                 && matches!(item.risk_level, RiskLevel::Medium | RiskLevel::High)
         })
         .count();
+    let irreversible_count = all_items
+        .iter()
+        .filter(|item| app.confirm_checked.contains(&item.path) && !item.reversible)
+        .count();
 
     // Apply filter for display, but keep unfiltered totals for summary
     let filtered_items: Vec<_> = if app.filter_query.is_empty() {
@@ -374,6 +402,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         checked_known_count,
         warned_count,
         risky_count,
+        irreversible_count,
     );
     render_action_bar(
         app,
@@ -427,14 +456,14 @@ fn render_items_list(app: &mut App, frame: &mut Frame, area: Rect, items: &[Conf
         let is_warned = item.safety_level == SafetyLevel::Warn;
         let is_risky = matches!(item.risk_level, RiskLevel::Medium | RiskLevel::High);
         let is_manual = item.restore_kind == RestoreKind::Manual;
-        let name_style = if is_warned || is_risky {
+        let name_style = if is_warned || is_risky || !item.reversible {
             app.theme.style_warning()
         } else {
             app.theme.style_normal()
         };
 
         // Combine name and path into one expanding cell
-        let path_str = item.path.display().to_string();
+        let path_str = item.shown_path().display().to_string();
         let max_path_len = (area.width as usize).saturating_sub(19 + item.name.len());
         let path_display = if path_str.len() > max_path_len && max_path_len > 3 {
             format!("...{}", &path_str[path_str.len() - (max_path_len - 3)..])
@@ -465,6 +494,9 @@ fn render_items_list(app: &mut App, frame: &mut Frame, area: Rect, items: &[Conf
         if is_manual {
             parts.push("[manual restore]".to_string());
         }
+        if !item.reversible {
+            parts.push("[cannot be undone]".to_string());
+        }
         if !parts.is_empty() {
             let indicator_text = format!("   \u{2014} {}", parts.join(" "));
             rows.push(Row::new(vec![
@@ -480,6 +512,17 @@ fn render_items_list(app: &mut App, frame: &mut Frame, area: Rect, items: &[Conf
             rows.push(Row::new(vec![
                 Cell::from(""),
                 Cell::from(Span::styled(restore_text, app.theme.style_description())),
+                Cell::from(""),
+            ]));
+        }
+
+        // Add the literal command for handler-backed items. Keep this in step
+        // with `visual_row_to_item_index` or click mapping desyncs.
+        if let Some(command) = &item.removal_command {
+            let command_text = format!("   \u{26a1} runs: {}", command);
+            rows.push(Row::new(vec![
+                Cell::from(""),
+                Cell::from(Span::styled(command_text, app.theme.style_warning())),
                 Cell::from(""),
             ]));
         }
@@ -519,6 +562,7 @@ fn render_summary(
     checked_known_count: usize,
     warned_count: usize,
     risky_count: usize,
+    irreversible_count: usize,
 ) {
     let size_text = format_size(checked_size);
     let suffix = if checked_known_count < checked_count {
@@ -563,6 +607,16 @@ fn render_summary(
             app.theme.style_warning(),
         ));
     }
+    if irreversible_count > 0 {
+        spans.push(Span::styled(
+            format!(
+                " [!] {} item{} cannot be undone",
+                irreversible_count,
+                if irreversible_count == 1 { "" } else { "s" }
+            ),
+            app.theme.style_error(),
+        ));
+    }
 
     let summary = Paragraph::new(Line::from(spans)).block(
         Block::default()
@@ -573,11 +627,27 @@ fn render_summary(
 }
 
 fn render_action_bar(app: &mut App, frame: &mut Frame, area: Rect, shown: usize, total: usize) {
+    // Surface the irreversible-items prompt inline, as the update-all prompt in
+    // `module_list.rs` does, rather than stacking a modal on the confirm screen.
+    let confirm_msg;
+    let flash = if app.confirm_irreversible_prompt {
+        let count = app.irreversible_checked_count();
+        confirm_msg = format!(
+            "{} item{} cannot be trashed and will be removed permanently. Include {}? [y]es [n]o",
+            count,
+            if count == 1 { "" } else { "s" },
+            if count == 1 { "it" } else { "them" },
+        );
+        Some((confirm_msg.as_str(), &crate::app::FlashLevel::Warning))
+    } else {
+        app.flash_message.as_ref().map(|(m, l)| (m.as_str(), l))
+    };
+
     render_view_status_bar(
         frame,
         area,
         app,
-        app.flash_message.as_ref().map(|(m, l)| (m.as_str(), l)),
+        flash,
         app.filter_active,
         &app.filter_query,
         false, // structured filter not applicable in cleanup confirm
@@ -640,6 +710,135 @@ mod tests {
     use crate::module::manifest::{Module, Target};
     use std::path::PathBuf;
 
+    /// A confirm app containing one handler-backed item.
+    fn make_handler_confirm_app() -> App {
+        let mut app = make_confirm_app();
+        let action = crate::core::cleaner::CleanupAction::Handler {
+            handler: "xcode.simulator-devices",
+            id: "ABC-123".to_string(),
+        };
+        let path = crate::core::handlers::identity_path("xcode.simulator-devices", "ABC-123");
+        app.modules[0].items.push(Item {
+            name: "iPhone 14".to_string(),
+            path: path.clone(),
+            size: Some(500_000_000),
+            item_type: ItemType::Directory,
+            display_path: Some(PathBuf::from(
+                "/Users/x/Library/Developer/CoreSimulator/Devices/ABC-123",
+            )),
+            risk_level: crate::module::manifest::RiskLevel::Medium,
+            restore_steps: Some("Recreate in Xcode".to_string()),
+            action,
+            ..Default::default()
+        });
+        app.selected_items.insert(path.clone());
+        app.confirm_checked.insert(path);
+        app
+    }
+
+    /// The confirmation screen must show the literal command, because that
+    /// display is the user's only chance to see what will run.
+    #[test]
+    fn handler_items_carry_their_command_into_the_confirm_list() {
+        let app = make_handler_confirm_app();
+        let items = collect_selected_items(&app);
+        let handler_item = items
+            .iter()
+            .find(|i| i.name == "iPhone 14")
+            .expect("handler item present");
+
+        assert_eq!(
+            handler_item.removal_command.as_deref(),
+            Some("xcrun simctl delete ABC-123")
+        );
+        assert!(!handler_item.reversible);
+        // The synthetic identity must never be what the user sees.
+        assert!(handler_item
+            .shown_path()
+            .starts_with("/Users/x/Library/Developer/CoreSimulator"));
+    }
+
+    /// `visual_row_to_item_index` and `render_items_list` must agree, or clicks
+    /// land on the wrong row.
+    #[test]
+    fn row_mapping_accounts_for_the_command_sub_row() {
+        let app = make_handler_confirm_app();
+        let items = collect_selected_items(&app);
+        let map = visual_row_to_item_index(&items);
+
+        let handler_idx = items.iter().position(|i| i.name == "iPhone 14").unwrap();
+
+        // Each item owns exactly one selectable row; sub-rows map to None so
+        // they cannot be selected or clicked independently.
+        assert_eq!(map.iter().filter(|e| **e == Some(handler_idx)).count(), 1);
+        assert_eq!(map.iter().filter(|e| e.is_some()).count(), items.len());
+
+        // The handler item contributes indicator, restore and command sub-rows
+        // on top of its main row.
+        let handler_row = map.iter().position(|e| *e == Some(handler_idx)).unwrap();
+        let sub_rows = map[handler_row + 1..]
+            .iter()
+            .take_while(|e| e.is_none())
+            .count();
+        assert_eq!(sub_rows, 3, "indicators + restore steps + command");
+    }
+
+    /// Trashing must never silently promote itself into a permanent delete.
+    #[test]
+    fn trashing_irreversible_items_asks_first() {
+        let mut app = make_handler_confirm_app();
+        assert!(app.irreversible_checked_count() > 0);
+
+        app.request_trash();
+        assert!(
+            app.confirm_irreversible_prompt,
+            "should prompt rather than silently deleting permanently"
+        );
+    }
+
+    /// Declining the prompt unchecks the items that cannot be trashed.
+    /// Only the handler item is checked here, so nothing is left to clean and
+    /// no background task is spawned.
+    #[test]
+    fn declining_the_prompt_drops_irreversible_items() {
+        let mut app = make_handler_confirm_app();
+        let handler_path =
+            crate::core::handlers::identity_path("xcode.simulator-devices", "ABC-123");
+        app.confirm_checked.clear();
+        app.confirm_checked.insert(handler_path.clone());
+
+        app.request_trash();
+        assert!(app.confirm_irreversible_prompt);
+
+        app.resolve_irreversible_prompt(false);
+        assert!(!app.confirm_irreversible_prompt);
+        assert!(
+            !app.confirm_checked.contains(&handler_path),
+            "declining should uncheck the item that cannot be trashed"
+        );
+    }
+
+    // Proceeds into `start_cleanup`, which spawns a blocking task.
+    #[tokio::test]
+    async fn path_only_selections_do_not_prompt() {
+        let mut app = make_confirm_app();
+        app.dry_run = true;
+        assert_eq!(app.irreversible_checked_count(), 0);
+        app.request_trash();
+        assert!(
+            !app.confirm_irreversible_prompt,
+            "ordinary path items trash without an extra prompt"
+        );
+    }
+
+    #[test]
+    fn render_with_handler_item_does_not_panic() {
+        let mut app = make_handler_confirm_app();
+        let backend = ratatui::backend::TestBackend::new(100, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+    }
+
     fn make_confirm_app() -> App {
         let module = Module {
             id: "test".to_string(),
@@ -652,7 +851,7 @@ mod tests {
             icon: None,
             icon_color: None,
             targets: vec![Target {
-                paths: vec!["~/test".to_string()],
+                source: crate::module::manifest::TargetSource::Paths(vec!["~/test".to_string()]),
                 description: None,
                 restore: crate::module::manifest::RestoreKind::default(),
                 restore_steps: None,
@@ -675,6 +874,7 @@ mod tests {
                     restore_steps: None,
                     risk_level: crate::module::manifest::RiskLevel::default(),
                     ignore_patterns: vec![],
+                    ..Default::default()
                 },
                 Item {
                     name: "small".to_string(),
@@ -688,10 +888,12 @@ mod tests {
                     restore_steps: None,
                     risk_level: crate::module::manifest::RiskLevel::default(),
                     ignore_patterns: vec![],
+                    ..Default::default()
                 },
             ],
             total_size: Some(5_000_001_000),
             status: ModuleStatus::Ready,
+            origin: crate::module::manager::ModuleOrigin::User,
             manifest_path: None,
             update_status: None,
         };

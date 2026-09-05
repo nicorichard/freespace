@@ -1,6 +1,34 @@
 # Writing Freespace Modules
 
-Freespace modules are purely declarative TOML files that tell freespace which filesystem paths to scan for cleanup. There is no code execution — a module is just a directory containing a `module.toml` manifest that declares path patterns.
+Freespace ships with a built-in catalog of modules, so it works out of the box with nothing installed. Modules are the extension point on top of that: a way to add paths freespace doesn't already know about, or to override a built-in.
+
+Modules are declarative TOML files. A module is a directory containing a `module.toml` manifest that declares either **path patterns** to scan, or the name of a **built-in handler**. A manifest cannot specify a command — it can only select from the fixed set of handlers compiled into freespace (see [Handlers](#handlers)), so installing a module never introduces new code.
+
+## Built-in modules
+
+Everything in the catalog loads automatically. To see what you have:
+
+```sh
+freespace module list          # built-ins are marked "built-in"
+freespace module inspect docker
+```
+
+Turn one off, or back on:
+
+```sh
+freespace module disable steam
+freespace module enable steam
+```
+
+Both edit `[modules]` in `~/.config/freespace/config.toml`:
+
+```toml
+[modules]
+builtin = true                  # set false to disable the whole catalog
+disabled = ["steam", "spotify"]
+```
+
+Installing a module with the same `id` as a built-in **replaces** it, which is the supported way to customise a shipped module: copy its manifest, edit it, and install it locally.
 
 ## Quick Start
 
@@ -46,14 +74,49 @@ Every module must have a `module.toml` at the root of its directory. All top-lev
 | `icon` | String | No | Nerd Font glyph — either a literal character or `U+XXXX`/`U+XXXXX` escape (must be in PUA range) |
 | `icon_color` | String | No | Hex color for the icon (e.g. `"#CE422B"`) |
 | `[[targets]]` | Array of tables | Yes | At least one target required |
-| `targets.path` | String | Yes | Path pattern (supports `~`, `*`, and `**/` for recursive search) |
+| `targets.path` | String or array | * | Path pattern (supports `~`, `*`, and `**/` for recursive search) |
+| `targets.paths` | String or array | * | Alias for `path`; use one or the other, not both |
+| `targets.handler` | String | * | Name of a built-in handler. Mutually exclusive with `path`/`paths` |
 | `targets.description` | String | No | What this specific target contains |
 | `targets.restore` | String | No | How contents are restored: `"auto"` (default) or `"manual"` |
 | `targets.restore_steps` | String | No | Human-readable recovery instructions (e.g. `"Run npm install"`) |
 | `targets.risk` | String | No | Impact of deletion: `"safe"` (default), `"low"`, `"medium"`, `"high"` |
 | `targets.ignore` | String or array | No | Glob patterns for files/directories to preserve within this target |
 
+\* Each target needs exactly one of `path`, `paths`, or `handler`.
+
 Modules with a `platforms` list that doesn't include the current OS are silently skipped.
+
+## Handlers
+
+Some things cannot be cleaned up correctly by deleting a directory. Simulator devices and runtimes are registered with CoreSimulator: trashing `~/Library/Developer/CoreSimulator/Devices` reclaims the bytes but leaves Xcode listing devices that can no longer boot. The supported operation is `xcrun simctl delete <UDID>`, and working out *which* devices are stale requires asking `simctl` in the first place.
+
+That knowledge is code, not data, so it lives in freespace rather than in a manifest. A handler knows how to enumerate its items, how large they are, and the exact command that removes one. A manifest selects a handler by name:
+
+```toml
+[[targets]]
+handler = "xcode.simulator-devices"
+description = "Simulator devices whose runtime is no longer installed"
+risk = "medium"
+restore = "manual"
+restore_steps = "Recreate in Xcode → Window → Devices and Simulators"
+```
+
+Available handlers:
+
+| Handler | What it manages | Removal command |
+|---------|-----------------|-----------------|
+| `xcode.simulator-devices` | Simulator devices whose runtime is gone | `xcrun simctl delete <UDID>` |
+| `xcode.simulator-runtimes` | Installed simulator runtimes | `xcrun simctl runtime delete <UUID>` |
+
+Naming a handler that this build of freespace doesn't have is a manifest error, caught when the module is parsed.
+
+Two things follow from handler items not being ordinary files:
+
+- **They cannot be trashed.** There is no undo for `simctl delete`. The cleanup screen marks them `[cannot be undone]` and shows the exact command that will run; pressing `t` (trash) asks before including them, and they always run *after* every reversible deletion so cancelling partway through leaves them untouched.
+- **They are sized by their own tool**, not by walking the filesystem, so they appear with an accurate size immediately.
+
+If a handler's tool isn't installed — no Xcode, or not macOS — its target simply yields nothing.
 
 ## Path Patterns
 
@@ -228,6 +291,8 @@ freespace --module-dir /path/to/your/modules
 This scans the given directory for subdirectories containing `module.toml`, in addition to the default location. Run freespace and verify your module appears and its targets resolve to the expected paths.
 
 ## Distribution
+
+Most users never need this — the built-in catalog covers the common cases. Distribute a module when you have paths specific to your setup, or want to override a built-in.
 
 Modules are distributed as Git repositories. Freespace clones the repo and copies module directories into `~/.config/freespace/modules/`.
 

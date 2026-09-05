@@ -43,7 +43,10 @@ impl std::fmt::Display for RestoreKind {
 }
 
 /// Potential impact of deleting a target's contents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// Ordered least to most severe, so callers can raise a risk level with
+/// `max` when they learn something the manifest could not know.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum RiskLevel {
     /// No meaningful impact — safe to remove freely.
     #[default]
@@ -124,6 +127,8 @@ struct RawTarget {
     path: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_optional_string_or_vec")]
     paths: Option<Vec<String>>,
+    /// Id of a built-in handler, mutually exclusive with `path`/`paths`.
+    handler: Option<String>,
     description: Option<String>,
     #[serde(default)]
     restore: RestoreKind,
@@ -255,22 +260,28 @@ impl Module {
 
         let mut targets = Vec::with_capacity(raw.targets.len());
         for raw_target in raw.targets {
-            let paths = match (raw_target.path, raw_target.paths) {
-                (Some(p), None) => p,
-                (None, Some(ps)) => ps,
-                (Some(_), Some(_)) => {
-                    bail!("target must specify either 'path' or 'paths', not both");
+            let source = match (raw_target.path, raw_target.paths, raw_target.handler) {
+                (Some(_), Some(_), _) => {
+                    bail!("target must specify either 'path' or 'paths', not both")
                 }
-                (None, None) => {
-                    bail!("target must specify either 'path' or 'paths'");
+                (Some(_), _, Some(_)) | (_, Some(_), Some(_)) => {
+                    bail!("target must specify paths or 'handler', not both")
+                }
+                (Some(p), None, None) => TargetSource::Paths(p),
+                (None, Some(ps), None) => TargetSource::Paths(ps),
+                (None, None, Some(handler)) => TargetSource::Handler(resolve_handler(&handler)?),
+                (None, None, None) => {
+                    bail!("target must specify 'path', 'paths', or 'handler'")
                 }
             };
-            if paths.is_empty() {
-                bail!("target paths must not be empty");
-            }
 
-            for p in &paths {
-                safety::validate_target_pattern(p)?;
+            if let TargetSource::Paths(paths) = &source {
+                if paths.is_empty() {
+                    bail!("target paths must not be empty");
+                }
+                for p in paths {
+                    safety::validate_target_pattern(p)?;
+                }
             }
 
             for pattern in &raw_target.ignore {
@@ -278,7 +289,7 @@ impl Module {
             }
 
             targets.push(Target {
-                paths,
+                source,
                 description: raw_target.description,
                 restore: raw_target.restore,
                 restore_steps: raw_target.restore_steps,
@@ -339,6 +350,22 @@ fn validate_icon(icon: &str) -> Result<()> {
     }
 }
 
+/// Resolve a manifest `handler` id against the handlers compiled into this
+/// binary.
+///
+/// Rejecting unknown ids here — at parse time — is what makes the handler list
+/// a closed set: a manifest can only ever select behaviour freespace already
+/// implements, so installing a module can never introduce a new command.
+fn resolve_handler(id: &str) -> Result<&'static str> {
+    crate::core::handlers::resolve_id(id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown handler '{}': expected one of {}",
+            id,
+            crate::core::handlers::all_ids().join(", ")
+        )
+    })
+}
+
 /// Validate that an ignore pattern is a relative glob (no `..` or absolute paths).
 fn validate_ignore_pattern(pattern: &str) -> Result<()> {
     if pattern.is_empty() {
@@ -385,17 +412,66 @@ fn validate_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-/// A target that a module scans. Each entry in `paths` is either a fixed path
-/// (supports `~` and glob `*`) or `**/dirname` for recursive local search.
+/// Where a target's items come from.
+///
+/// Modelled as an enum rather than an optional field so a target with both
+/// paths and a handler is unrepresentable, and so every consumer must handle
+/// both cases explicitly.
 #[derive(Debug, Clone)]
+pub enum TargetSource {
+    /// Filesystem patterns. Each entry is either a fixed path (supporting `~`
+    /// and glob `*`) or `**/dirname` for recursive local search.
+    Paths(Vec<String>),
+    /// A built-in handler, referenced by id. Always one of
+    /// [`crate::core::handlers::all_ids`] — `Module::parse` rejects anything
+    /// else, so a manifest can never name a handler this binary lacks.
+    Handler(&'static str),
+}
+
+/// A target that a module scans.
+#[derive(Debug, Clone, Default)]
 pub struct Target {
-    pub paths: Vec<String>,
+    pub source: TargetSource,
     pub description: Option<String>,
     pub restore: RestoreKind,
     pub restore_steps: Option<String>,
     pub risk: RiskLevel,
     /// Glob patterns for files/directories to preserve when cleaning this target.
+    /// Only meaningful for path targets.
     pub ignore: Vec<String>,
+}
+
+impl Default for TargetSource {
+    fn default() -> Self {
+        TargetSource::Paths(Vec::new())
+    }
+}
+
+impl Target {
+    /// The path patterns for this target, or empty for a handler target.
+    pub fn paths(&self) -> &[String] {
+        match &self.source {
+            TargetSource::Paths(paths) => paths,
+            TargetSource::Handler(_) => &[],
+        }
+    }
+
+    /// The handler id, if this is a handler target.
+    pub fn handler(&self) -> Option<&'static str> {
+        match &self.source {
+            TargetSource::Paths(_) => None,
+            TargetSource::Handler(id) => Some(id),
+        }
+    }
+
+    /// Directory names this target searches for recursively under the user's
+    /// configured search dirs (the `**/name` form).
+    pub fn local_search_names(&self) -> impl Iterator<Item = &str> {
+        self.paths()
+            .iter()
+            .filter_map(|p| p.strip_prefix("**/"))
+            .filter(|name| !name.is_empty())
+    }
 }
 
 #[cfg(test)]
@@ -424,7 +500,7 @@ mod tests {
         assert_eq!(module.name, "test-module");
         assert_eq!(module.version, "1.0.0");
         assert_eq!(module.targets.len(), 1);
-        assert_eq!(module.targets[0].paths, vec!["~/Library/Caches/test"]);
+        assert_eq!(module.targets[0].paths(), vec!["~/Library/Caches/test"]);
     }
 
     #[test]
@@ -442,7 +518,7 @@ mod tests {
         description = "Node dependencies"
         "#;
         let module = Module::parse(toml_str).unwrap();
-        assert_eq!(module.targets[0].paths, vec!["**/node_modules"]);
+        assert_eq!(module.targets[0].paths(), vec!["**/node_modules"]);
     }
 
     #[test]
@@ -586,7 +662,7 @@ mod tests {
         let module = Module::parse(toml_str).unwrap();
         assert_eq!(module.targets.len(), 1);
         assert_eq!(
-            module.targets[0].paths,
+            module.targets[0].paths(),
             vec!["~/Library/Caches/foo", "~/Library/Caches/bar"]
         );
     }
@@ -594,7 +670,7 @@ mod tests {
     #[test]
     fn parse_single_path_backward_compat() {
         let module = Module::parse(valid_global_toml()).unwrap();
-        assert_eq!(module.targets[0].paths, vec!["~/Library/Caches/test"]);
+        assert_eq!(module.targets[0].paths(), vec!["~/Library/Caches/test"]);
     }
 
     #[test]
@@ -629,7 +705,66 @@ mod tests {
         description = "no path at all"
         "#;
         let err = Module::parse(toml_str).unwrap_err();
-        assert!(err.to_string().contains("either"));
+        assert!(
+            err.to_string().contains("'path', 'paths', or 'handler'"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_accepts_a_known_handler() {
+        let toml_str = r#"
+        id = "handler-mod"
+        name = "Handler"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+
+        [[targets]]
+        handler = "xcode.simulator-devices"
+        description = "stale simulators"
+        "#;
+        let module = Module::parse(toml_str).unwrap();
+        assert_eq!(module.targets[0].handler(), Some("xcode.simulator-devices"));
+        assert!(module.targets[0].paths().is_empty());
+    }
+
+    /// The closed handler set is what keeps manifests unable to introduce new
+    /// commands, so an unknown id must be a parse error, not a runtime no-op.
+    #[test]
+    fn parse_rejects_an_unknown_handler() {
+        let toml_str = r#"
+        id = "handler-mod"
+        name = "Handler"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+
+        [[targets]]
+        handler = "totally.made.up"
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains("unknown handler"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_rejects_handler_combined_with_a_path() {
+        let toml_str = r#"
+        id = "handler-mod"
+        name = "Handler"
+        version = "1.0.0"
+        description = "test"
+        author = "tester"
+        platforms = ["macos"]
+
+        [[targets]]
+        path = "~/somewhere"
+        handler = "xcode.simulator-devices"
+        "#;
+        let err = Module::parse(toml_str).unwrap_err();
+        assert!(err.to_string().contains("not both"), "got: {err}");
     }
 
     #[test]
@@ -680,10 +815,10 @@ mod tests {
         paths = ["~/Library/Caches/a", "~/Library/Caches/b", "~/Library/Caches/c"]
         "#;
         let module = Module::parse(toml_str).unwrap();
-        assert_eq!(module.targets[0].paths.len(), 3);
-        assert_eq!(module.targets[0].paths[0], "~/Library/Caches/a");
-        assert_eq!(module.targets[0].paths[1], "~/Library/Caches/b");
-        assert_eq!(module.targets[0].paths[2], "~/Library/Caches/c");
+        assert_eq!(module.targets[0].paths().len(), 3);
+        assert_eq!(module.targets[0].paths()[0], "~/Library/Caches/a");
+        assert_eq!(module.targets[0].paths()[1], "~/Library/Caches/b");
+        assert_eq!(module.targets[0].paths()[2], "~/Library/Caches/c");
     }
 
     #[test]
@@ -701,7 +836,7 @@ mod tests {
         "#;
         let module = Module::parse(toml_str).unwrap();
         assert_eq!(
-            module.targets[0].paths,
+            module.targets[0].paths(),
             vec!["~/Library/Caches/foo", "~/Library/Caches/bar"]
         );
     }
@@ -720,7 +855,7 @@ mod tests {
         paths = "~/Library/Caches/foo"
         "#;
         let module = Module::parse(toml_str).unwrap();
-        assert_eq!(module.targets[0].paths, vec!["~/Library/Caches/foo"]);
+        assert_eq!(module.targets[0].paths(), vec!["~/Library/Caches/foo"]);
     }
 
     #[test]

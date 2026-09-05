@@ -1,0 +1,30 @@
+id = "teams"
+name = "Microsoft Teams Caches"
+version = "1.0.0"
+description = "Microsoft Teams client caches and temp files."
+author = "freespace"
+platforms = ["macos"]
+
+[[targets]]
+path = "~/Library/Application Support/Microsoft/Teams/Cache"
+description = "Teams classic cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Microsoft/Teams/Service Worker/CacheStorage"
+description = "Teams classic service worker cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Containers/com.microsoft.teams2/Data/Library/Caches"
+description = "New Teams cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Containers/com.microsoft.teams2/Data/tmp"
+description = "New Teams temp files"
+risk = "safe"
+restore = "auto"

@@ -1,0 +1,20 @@
+id = "ollama-llm"
+name = "LLM Model Caches"
+version = "1.0.0"
+description = "Downloaded LLM model files from Ollama, LM Studio, and similar tools."
+author = "freespace"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "~/.ollama/models"
+description = "Ollama LLM model files"
+risk = "low"
+restore = "manual"
+restore_steps = "Run `ollama pull <model>` for each model you need"
+
+[[targets]]
+path = "~/.cache/lm-studio"
+description = "LM Studio downloaded model files"
+risk = "low"
+restore = "manual"
+restore_steps = "Re-download models via LM Studio"

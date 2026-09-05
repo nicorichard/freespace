@@ -15,9 +15,47 @@ pub enum CleanupMessage {
         done: usize,
         total: usize,
         path: PathBuf,
+        /// What to show for this step. `None` means fall back to the path.
+        /// Handler steps set this to the command being run, since their path is
+        /// a synthetic identity that would mean nothing to the user.
+        label: Option<String>,
     },
     /// The entire cleanup operation has finished (or was cancelled).
     Complete(CleanupResult),
+}
+
+/// How an item is removed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum CleanupAction {
+    /// Trash or unlink the item's path. Subject to the full path safety check.
+    #[default]
+    Path,
+    /// Delegate to a built-in handler, which removes the item through its own
+    /// tool's supported interface.
+    Handler {
+        handler: &'static str,
+        /// Identifier this handler produced during discovery (e.g. a UDID).
+        id: String,
+    },
+}
+
+impl CleanupAction {
+    /// Whether removal can be undone. Handler commands have no Trash
+    /// equivalent, so they are always permanent.
+    pub fn is_reversible(&self) -> bool {
+        matches!(self, CleanupAction::Path)
+    }
+
+    /// The exact command a handler action will run, for display before the user
+    /// confirms. `None` for path actions.
+    pub fn removal_command(&self) -> Option<String> {
+        match self {
+            CleanupAction::Path => None,
+            CleanupAction::Handler { handler, id } => {
+                crate::core::handlers::get(handler).map(|h| h.describe_removal(id))
+            }
+        }
+    }
 }
 
 /// Options controlling cleanup behavior.
@@ -45,6 +83,8 @@ impl Default for CleanupOptions {
 
 /// An item to be cleaned up, with optional ignore patterns.
 pub struct CleanupItem {
+    /// The item's identity. A real filesystem path for [`CleanupAction::Path`];
+    /// a synthetic identity for handler items, which is never touched on disk.
     pub path: PathBuf,
     /// Glob patterns for files/directories to preserve within this path.
     pub ignore_patterns: Vec<String>,
@@ -52,6 +92,8 @@ pub struct CleanupItem {
     pub module_id: String,
     /// Known size of this item in bytes (for audit logging).
     pub size: Option<u64>,
+    /// How to remove it.
+    pub action: CleanupAction,
 }
 
 impl From<PathBuf> for CleanupItem {
@@ -61,8 +103,55 @@ impl From<PathBuf> for CleanupItem {
             ignore_patterns: Vec::new(),
             module_id: String::new(),
             size: None,
+            action: CleanupAction::Path,
         }
     }
+}
+
+/// Split items so every reversible (path) removal runs before any irreversible
+/// (handler) one.
+///
+/// Cancelling partway through then leaves the permanent operations undone,
+/// which is the failure mode worth protecting: a half-finished trash run is
+/// recoverable, a half-finished `simctl delete` run is not.
+fn reversible_first(items: &[CleanupItem]) -> Vec<&CleanupItem> {
+    let (reversible, irreversible): (Vec<_>, Vec<_>) =
+        items.iter().partition(|i| i.action.is_reversible());
+    reversible.into_iter().chain(irreversible).collect()
+}
+
+/// Run a handler removal for one item.
+///
+/// Deliberately **not** subject to `check_safety`: the path-based safety model
+/// answers "is it safe to unlink this?", which is the wrong question for an
+/// operation that does not unlink anything. The handler is compiled-in,
+/// reviewed code operating on an identifier it produced itself. Authority is
+/// the `action` variant — never the shape of the identity path.
+fn run_handler(
+    handler_id: &str,
+    item_id: &str,
+    item: &CleanupItem,
+    opts: &CleanupOptions,
+) -> Result<(), String> {
+    let Some(handler) = crate::core::handlers::get(handler_id) else {
+        return Err(format!("unknown handler '{handler_id}'"));
+    };
+
+    if opts.dry_run {
+        return Ok(());
+    }
+
+    handler.remove(item_id).map_err(|e| e.to_string())?;
+
+    if opts.audit_log {
+        audit::log_operation(
+            &handler.describe_removal(item_id),
+            &item.path,
+            item.size,
+            &item.module_id,
+        );
+    }
+    Ok(())
 }
 
 /// Result of a cleanup operation.
@@ -87,13 +176,18 @@ pub fn trash_items(
     };
     let total = items.len();
 
-    for (i, item) in items.iter().enumerate() {
+    for (i, item) in reversible_first(items).into_iter().enumerate() {
         let path = &item.path;
         if cancel.load(Ordering::Relaxed) {
             break;
         }
 
-        if let Some(reason) = check_safety(path, opts) {
+        if let CleanupAction::Handler { handler, id } = &item.action {
+            match run_handler(handler, id, item, opts) {
+                Ok(()) => result.succeeded.push(path.clone()),
+                Err(e) => result.failed.push((path.clone(), e)),
+            }
+        } else if let Some(reason) = check_safety(path, opts) {
             result.failed.push((path.clone(), reason));
         } else if opts.dry_run {
             result.succeeded.push(path.clone());
@@ -123,6 +217,7 @@ pub fn trash_items(
             done: i + 1,
             total,
             path: path.clone(),
+            label: item.action.removal_command(),
         });
     }
 
@@ -145,13 +240,18 @@ pub fn delete_items(
     };
     let total = items.len();
 
-    for (i, item) in items.iter().enumerate() {
+    for (i, item) in reversible_first(items).into_iter().enumerate() {
         let path = &item.path;
         if cancel.load(Ordering::Relaxed) {
             break;
         }
 
-        if let Some(reason) = check_safety(path, opts) {
+        if let CleanupAction::Handler { handler, id } = &item.action {
+            match run_handler(handler, id, item, opts) {
+                Ok(()) => result.succeeded.push(path.clone()),
+                Err(e) => result.failed.push((path.clone(), e)),
+            }
+        } else if let Some(reason) = check_safety(path, opts) {
             result.failed.push((path.clone(), reason));
         } else if opts.dry_run {
             result.succeeded.push(path.clone());
@@ -189,6 +289,7 @@ pub fn delete_items(
             done: i + 1,
             total,
             path: path.clone(),
+            label: item.action.removal_command(),
         });
     }
 
@@ -257,6 +358,105 @@ fn check_safety(path: &Path, opts: &CleanupOptions) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    // --- handler actions ---
+
+    fn handler_item(id: &str) -> CleanupItem {
+        CleanupItem {
+            path: crate::core::handlers::identity_path("xcode.simulator-devices", id),
+            ignore_patterns: Vec::new(),
+            module_id: "xcode-simulators".to_string(),
+            size: Some(1024),
+            action: CleanupAction::Handler {
+                handler: "xcode.simulator-devices",
+                id: id.to_string(),
+            },
+        }
+    }
+
+    fn path_item(path: &Path) -> CleanupItem {
+        CleanupItem::from(path.to_path_buf())
+    }
+
+    #[test]
+    fn handler_actions_are_never_reversible() {
+        assert!(CleanupAction::Path.is_reversible());
+        assert!(!handler_item("ABC").action.is_reversible());
+    }
+
+    #[test]
+    fn handler_action_exposes_the_exact_command() {
+        assert_eq!(
+            handler_item("ABC-123").action.removal_command().as_deref(),
+            Some("xcrun simctl delete ABC-123")
+        );
+        assert_eq!(CleanupAction::Path.removal_command(), None);
+    }
+
+    /// Reversible work must run first so cancelling partway through leaves the
+    /// permanent operations undone.
+    #[test]
+    fn reversible_work_is_ordered_before_irreversible() {
+        let tmp = TempDir::new().unwrap();
+        let a = tmp.path().join("a.txt");
+        let b = tmp.path().join("b.txt");
+        std::fs::write(&a, "x").unwrap();
+        std::fs::write(&b, "x").unwrap();
+
+        let items = vec![
+            handler_item("FIRST"),
+            path_item(&a),
+            handler_item("SECOND"),
+            path_item(&b),
+        ];
+
+        let ordered = reversible_first(&items);
+        let reversible: Vec<bool> = ordered.iter().map(|i| i.action.is_reversible()).collect();
+        assert_eq!(reversible, vec![true, true, false, false]);
+    }
+
+    /// A handler item's identity path is synthetic. Dry-run must short-circuit
+    /// before the handler runs, and must never touch the filesystem.
+    #[test]
+    fn dry_run_does_not_invoke_the_handler() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let cancel = AtomicBool::new(false);
+        let opts = CleanupOptions {
+            dry_run: true,
+            audit_log: false,
+            ..Default::default()
+        };
+
+        let items = vec![handler_item("ABC")];
+        let result = delete_items(&items, &opts, &cancel, &tx);
+
+        assert_eq!(result.succeeded.len(), 1);
+        assert!(result.failed.is_empty());
+        assert!(!items[0].path.exists(), "identity path is not a real file");
+    }
+
+    #[test]
+    fn unknown_handler_fails_the_item_rather_than_the_batch() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let cancel = AtomicBool::new(false);
+        let opts = CleanupOptions {
+            audit_log: false,
+            ..Default::default()
+        };
+
+        let items = vec![CleanupItem {
+            action: CleanupAction::Handler {
+                handler: "gone.missing",
+                id: "x".to_string(),
+            },
+            ..CleanupItem::from(PathBuf::from("freespace-handler/gone.missing/x"))
+        }];
+        let result = delete_items(&items, &opts, &cancel, &tx);
+
+        assert!(result.succeeded.is_empty());
+        assert_eq!(result.failed.len(), 1);
+        assert!(result.failed[0].1.contains("unknown handler"));
+    }
+
     use super::*;
     use std::fs;
     use std::sync::Arc;
@@ -559,6 +759,7 @@ mod tests {
             ignore_patterns: vec!["config.plist".to_string()],
             module_id: String::new(),
             size: None,
+            action: CleanupAction::Path,
         }];
 
         let result = delete_items(&cleanup_items, &default_opts(), &no_cancel(), &test_tx());
@@ -588,6 +789,7 @@ mod tests {
             ignore_patterns: vec!["*.lock".to_string()],
             module_id: String::new(),
             size: None,
+            action: CleanupAction::Path,
         }];
 
         let result = delete_items(&cleanup_items, &default_opts(), &no_cancel(), &test_tx());

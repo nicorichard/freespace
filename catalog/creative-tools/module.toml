@@ -1,0 +1,69 @@
+id = "creative-tools"
+name = "Creative App Caches"
+version = "1.0.0"
+description = "Caches from Sketch, Figma, DaVinci Resolve, Blender, and other creative tools."
+author = "freespace"
+platforms = ["macos"]
+
+[[targets]]
+path = "~/Library/Application Support/Sketch/Caches"
+description = "Sketch document caches"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Figma/Cache"
+description = "Figma desktop cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Figma/Code Cache"
+description = "Figma code cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/DaVinci Resolve/cache"
+description = "DaVinci Resolve render and optimized media cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/GarageBand/Instrument Library"
+description = "GarageBand sound library downloads"
+risk = "low"
+restore = "manual"
+restore_steps = "Re-download via GarageBand Sound Library"
+
+[[targets]]
+path = "~/Library/Application Support/Logic/Instrument Library"
+description = "Logic Pro sound library downloads"
+risk = "low"
+restore = "manual"
+restore_steps = "Re-download via Logic Pro Sound Library"
+
+[[targets]]
+path = "~/Library/Application Support/Blender/*/cache"
+description = "Blender thumbnail and render cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Movies/Motion Templates.localized"
+description = "Motion templates for Final Cut Pro"
+risk = "low"
+restore = "manual"
+restore_steps = "Re-download from Apple"
+
+[[targets]]
+path = "~/Library/Application Support/Adobe/Common/GPU Caches"
+description = "Adobe GPU shader cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Adobe/CRLogs"
+description = "Adobe crash logs"
+risk = "safe"
+restore = "auto"

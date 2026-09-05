@@ -1,0 +1,21 @@
+id = "ruby-gems"
+name = "Ruby Gem Cache"
+version = "1.0.0"
+description = "Ruby gem installations and cache"
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+icon_color = "#CC342D"
+
+[[targets]]
+path = "~/.gem"
+description = "User-installed Ruby gems"
+risk = "low"
+restore = "manual"
+restore_steps = "Run `gem install` or `bundle install`"
+
+[[targets]]
+path = "~/.bundle/cache"
+description = "Bundler gem cache"
+risk = "safe"
+restore = "auto"

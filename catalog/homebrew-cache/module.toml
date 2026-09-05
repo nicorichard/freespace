@@ -1,0 +1,13 @@
+id = "homebrew-cache"
+name = "Homebrew Cache"
+version = "1.0.0"
+description = "Cached Homebrew downloads and bottles."
+author = "freespace"
+platforms = ["macos"]
+icon = ""
+
+[[targets]]
+path = "~/Library/Caches/Homebrew/*"
+description = "Homebrew cached downloads and bottle files"
+risk = "safe"
+restore = "auto"

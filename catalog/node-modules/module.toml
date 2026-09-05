@@ -1,0 +1,15 @@
+id = "node-modules"
+name = "Node Modules"
+version = "1.0.0"
+description = "Project-local node_modules directories"
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+icon_color = "#339933"
+
+[[targets]]
+path = "**/node_modules"
+description = "Node.js dependencies"
+risk = "low"
+restore = "manual"
+restore_steps = "Run `npm install`, `yarn install`, or `pnpm install`"

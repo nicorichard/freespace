@@ -1,0 +1,43 @@
+id = "apple-media"
+name = "Apple Media Caches"
+version = "1.0.0"
+description = "Caches from Apple Music, Podcasts, TV+, and other media apps."
+author = "freespace"
+platforms = ["macos"]
+icon = ""
+
+[[targets]]
+path = "~/Library/Group Containers/*.music/Library/Caches"
+description = "Apple Music caches"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Group Containers/*.apple.podcasts"
+description = "Apple Podcasts downloaded episodes"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Containers/com.apple.TV/Data/Library/Caches"
+description = "Apple TV+ cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/com.apple.tv/LocalStorage"
+description = "Apple TV+ local storage"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/VLC/art"
+description = "VLC album art cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Caches/com.apple.podcasts/streaming"
+description = "Podcasts streaming media cache"
+risk = "safe"
+restore = "auto"

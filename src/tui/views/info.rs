@@ -11,6 +11,7 @@ use ratatui::Frame;
 
 use crate::app::{App, ModuleUpdateStatus, SiblingUpdatePrompt, View};
 use crate::module::installer;
+use crate::module::manager::ModuleOrigin;
 use crate::module::manifest::{RestoreKind, RiskLevel};
 use crate::tui::widgets::{centered_rect, format_size};
 
@@ -19,8 +20,24 @@ pub fn handle_key(app: &mut App, key: KeyCode, module_idx: usize) {
     if app.info_confirm_remove {
         match key {
             KeyCode::Char('y') => {
-                // Remove the module directory and state
-                if let Some(manifest_path) = &app.modules[module_idx].manifest_path {
+                if app.modules[module_idx].origin == ModuleOrigin::Builtin {
+                    // Nothing on disk to delete — record the choice in config so
+                    // it survives a restart, and let the user re-enable later.
+                    let id = app.modules[module_idx].module.id.clone();
+                    match app.disable_builtin_module(&id) {
+                        Ok(()) => app.set_flash(
+                            format!(
+                                "Disabled '{id}' — re-enable with `freespace module enable {id}`"
+                            ),
+                            crate::app::FlashLevel::Info,
+                        ),
+                        Err(e) => app.set_flash(
+                            format!("Could not disable '{id}': {e}"),
+                            crate::app::FlashLevel::Error,
+                        ),
+                    }
+                } else if let Some(manifest_path) = &app.modules[module_idx].manifest_path {
+                    // Remove the module directory
                     if let Some(module_dir) = manifest_path.parent() {
                         let _ = std::fs::remove_dir_all(module_dir);
                     }
@@ -95,7 +112,9 @@ pub fn handle_key(app: &mut App, key: KeyCode, module_idx: usize) {
                 }
             }
         }
-        KeyCode::Char('r') => {
+        // Built-in modules have nothing on disk to remove; `r` disables them
+        // in config instead, which is the reversible equivalent.
+        KeyCode::Char('r') | KeyCode::Char('D') => {
             app.info_confirm_remove = true;
         }
         KeyCode::Char('u') => {
@@ -230,7 +249,9 @@ fn render_metadata(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usi
             let label = target
                 .description
                 .as_deref()
-                .unwrap_or_else(|| target.paths.first().map(|s| s.as_str()).unwrap_or("?"));
+                .or_else(|| target.paths().first().map(|s| s.as_str()))
+                .or(target.handler())
+                .unwrap_or("?");
             let mut parts: Vec<String> = Vec::new();
             if target.restore == RestoreKind::Manual {
                 parts.push("manual restore".to_string());
@@ -358,8 +379,13 @@ fn render_metadata(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usi
 
     // Action bar, remove confirmation, or update confirmation
     if app.info_confirm_remove {
+        let prompt = if ms.origin == ModuleOrigin::Builtin {
+            "Disable module?"
+        } else {
+            "Remove module?"
+        };
         rows.push(Row::new(vec![
-            Span::styled("Remove module?", app.theme.style_warning()),
+            Span::styled(prompt, app.theme.style_warning()),
             Span::styled(
                 "[y]es  [n]o",
                 Style::default()
@@ -378,13 +404,16 @@ fn render_metadata(app: &mut App, frame: &mut Frame, area: Rect, module_idx: usi
                     | ModuleUpdateStatus::NewerTagAvailable { .. }
             )
         );
-        let right_actions = if has_update {
-            "[o]pen  [u]pdate  [r]emove"
+        // Built-ins live in the binary: nothing to edit, open, update, or delete.
+        let (left_action, right_actions) = if ms.origin == ModuleOrigin::Builtin {
+            ("", "[r] disable")
+        } else if has_update {
+            ("[e]dit", "[o]pen  [u]pdate  [r]emove")
         } else {
-            "[o]pen  [r]emove"
+            ("[e]dit", "[o]pen  [r]emove")
         };
         rows.push(Row::new(vec![
-            Span::styled("[e]dit", action_style),
+            Span::styled(left_action, action_style),
             Span::styled(right_actions, action_style),
         ]));
     }

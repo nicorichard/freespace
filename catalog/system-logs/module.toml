@@ -1,0 +1,26 @@
+id = "system-logs"
+name = "macOS Logs & Diagnostics"
+version = "1.0.0"
+description = "System logs, crash reports, and diagnostic data"
+author = "freespace"
+platforms = ["macos"]
+icon = ""
+
+[[targets]]
+path = "~/Library/Logs/*"
+description = "Application and system logs"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/DiagnosticReports"
+description = "User-level crash and hang reports"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "/Library/Logs/DiagnosticReports"
+description = "System-level crash and hang reports"
+risk = "safe"
+restore = "auto"
+

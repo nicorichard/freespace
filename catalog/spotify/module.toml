@@ -1,0 +1,12 @@
+id = "spotify"
+name = "Spotify Cache"
+version = "1.0.0"
+description = "Spotify offline music cache and streaming data."
+author = "freespace"
+platforms = ["macos"]
+
+[[targets]]
+path = "~/Library/Application Support/Spotify/PersistentCache"
+description = "Spotify offline music cache"
+risk = "safe"
+restore = "auto"

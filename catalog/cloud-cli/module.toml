@@ -1,0 +1,30 @@
+id = "cloud-cli"
+name = "Cloud CLI Caches"
+version = "1.0.0"
+description = "Cached data and logs from cloud provider CLI tools (AWS, GCP, Azure, kubectl)."
+author = "freespace"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "~/.kube/cache"
+description = "kubectl API discovery and HTTP cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.aws/cli/cache"
+description = "AWS CLI credential and API cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.config/gcloud/logs"
+description = "Google Cloud CLI logs"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.azure/logs"
+description = "Azure CLI logs"
+risk = "safe"
+restore = "auto"

@@ -1,0 +1,32 @@
+id = "cargo-rust"
+name = "Rust & Cargo Caches"
+version = "1.0.0"
+description = "Cargo registry cache, git checkouts, and Rustup downloads."
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+icon_color = "#CE422B"
+
+[[targets]]
+path = "~/.cargo/registry/cache"
+description = "Downloaded crate archives"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.cargo/git"
+description = "Cargo git dependency checkouts"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.rustup/downloads"
+description = "Rustup toolchain downloads"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.rustup/tmp"
+description = "Rustup temporary files"
+risk = "safe"
+restore = "auto"

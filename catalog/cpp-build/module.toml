@@ -1,0 +1,24 @@
+id = "cpp-build"
+name = "C/C++ Package Caches"
+version = "1.0.0"
+description = "Package manager caches for Conan and vcpkg."
+author = "freespace"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "~/.conan2"
+description = "Conan 2.x package cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.conan"
+description = "Conan 1.x package cache (legacy)"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.cache/vcpkg"
+description = "vcpkg binary cache"
+risk = "safe"
+restore = "auto"

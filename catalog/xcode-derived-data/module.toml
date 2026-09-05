@@ -1,0 +1,13 @@
+id = "xcode-derived-data"
+name = "Xcode Derived Data"
+version = "1.0.0"
+description = "Xcode build artifacts and derived data"
+author = "freespace"
+platforms = ["macos"]
+icon = ""
+
+[[targets]]
+path = "~/Library/Developer/Xcode/DerivedData/*"
+description = "Xcode derived data directories for each project"
+risk = "safe"
+restore = "auto"

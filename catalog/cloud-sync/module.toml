@@ -1,0 +1,18 @@
+id = "cloud-sync"
+name = "Cloud Sync Caches"
+version = "1.0.0"
+description = "Local caches from cloud storage sync clients."
+author = "freespace"
+platforms = ["macos"]
+
+[[targets]]
+path = "~/Library/Application Support/Google/DriveFS/caches"
+description = "Google Drive File Stream cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.dropbox/cache"
+description = "Dropbox sync cache"
+risk = "safe"
+restore = "auto"

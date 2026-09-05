@@ -123,6 +123,9 @@ pub struct App {
     /// Items checked for cleanup in the confirmation view (subset of selected_items).
     pub confirm_checked: BTreeSet<PathBuf>,
     /// Whether the cleanup action choice dialog (trash/delete) is open.
+    /// Inline prompt shown when a trash request includes items that have no
+    /// trash equivalent (handler-backed removals).
+    pub confirm_irreversible_prompt: bool,
     pub cleanup_action_dialog: bool,
     /// Cursor position in the action dialog (0 = trash, 1 = delete).
     pub cleanup_action_cursor: usize,
@@ -311,7 +314,7 @@ impl App {
         dry_run: bool,
         directory_mode: bool,
     ) -> Self {
-        let (modules, search_dirs, config) =
+        let (modules, search_dirs, config, superseded) =
             Self::load_modules_and_config(cli_module_dirs, cli_search_dirs, directory_mode);
 
         let protected_paths = safety::expand_protected_paths(&config.protected_paths);
@@ -336,7 +339,7 @@ impl App {
         // Spawn background update checks for git-sourced modules
         let update_check_rx = spawn_update_checks(&modules);
 
-        Self {
+        let mut app = Self {
             modules,
             current_view: View::ModuleList,
             selected_index: 0,
@@ -381,6 +384,7 @@ impl App {
             cleanup_cancel: None,
             cleanup_progress: None,
             confirm_checked: BTreeSet::new(),
+            confirm_irreversible_prompt: false,
             cleanup_action_dialog: false,
             cleanup_action_cursor: 0,
             view_offset: 0,
@@ -394,7 +398,24 @@ impl App {
             install_mode: false,
             stats: stats::Stats::load(),
             cleanup_item_meta: HashMap::new(),
+        };
+
+        // Modules that used to be installed from the community repo are now
+        // vendored, so the installed copies are dead weight. Say so once rather
+        // than deleting anything on the user's behalf.
+        if !superseded.is_empty() {
+            app.set_flash(
+                format!(
+                    "{} installed module{} now built in — run `freespace module prune-vendored` to remove {}",
+                    superseded.len(),
+                    if superseded.len() == 1 { "" } else { "s" },
+                    if superseded.len() == 1 { "it" } else { "them" },
+                ),
+                FlashLevel::Info,
+            );
         }
+
+        app
     }
 
     /// Create a new App in install-only mode: no scanning, just the install picker.
@@ -447,6 +468,7 @@ impl App {
             cleanup_cancel: None,
             cleanup_progress: None,
             confirm_checked: BTreeSet::new(),
+            confirm_irreversible_prompt: false,
             cleanup_action_dialog: false,
             cleanup_action_cursor: 0,
             view_offset: 0,
@@ -749,25 +771,51 @@ impl App {
         }
     }
 
+    /// Persist a built-in module as disabled in `config.toml`.
+    ///
+    /// Built-ins have no directory to delete, so disabling is how a user opts
+    /// out of one. Writing it to config keeps the choice across restarts and
+    /// leaves `freespace module enable <id>` as the way back.
+    pub(crate) fn disable_builtin_module(
+        &mut self,
+        id: &str,
+    ) -> Result<(), crate::config::ConfigError> {
+        let mut cfg = AppConfig::load()?;
+        cfg.modules.disable(id);
+        cfg.save()
+    }
+
+    /// Re-read config and all module sources, then restart scanning.
+    ///
+    /// Used after anything that changes which modules apply: installing,
+    /// removing, or enabling/disabling a built-in.
+    pub(crate) fn reload_modules(&mut self) {
+        let (modules, search_dirs, config, _superseded) =
+            Self::load_modules_and_config(Vec::new(), Vec::new(), false);
+        self.modules = modules;
+        self.protected_paths = safety::expand_protected_paths(&config.protected_paths);
+        self.selected_items.clear();
+        self.confirm_checked.clear();
+
+        // Start a new scan
+        let manifests: Vec<Module> = self.modules.iter().map(|ms| ms.module.clone()).collect();
+        if manifests.is_empty() {
+            self.scan_status = ScanStatus::Complete;
+        } else {
+            let cancel = scanner::start_scan(manifests, self.scan_tx.clone(), search_dirs);
+            self.scan_status = ScanStatus::Scanning;
+            self.scan_cancel = cancel;
+        }
+
+        // Restart update checks
+        self.update_check_rx = spawn_update_checks(&self.modules);
+    }
+
     /// Finish install flow: transition back to module list or quit.
     pub fn finish_module_install(&mut self) {
         // If launched in normal mode (not install-only), reload modules and rescan
         if !self.install_mode {
-            let (modules, search_dirs, config) =
-                Self::load_modules_and_config(Vec::new(), Vec::new(), false);
-            self.modules = modules;
-            self.protected_paths = safety::expand_protected_paths(&config.protected_paths);
-
-            // Start a new scan
-            let manifests: Vec<Module> = self.modules.iter().map(|ms| ms.module.clone()).collect();
-            if !manifests.is_empty() {
-                let cancel = scanner::start_scan(manifests, self.scan_tx.clone(), search_dirs);
-                self.scan_status = ScanStatus::Scanning;
-                self.scan_cancel = cancel;
-            }
-
-            // Restart update checks
-            self.update_check_rx = spawn_update_checks(&self.modules);
+            self.reload_modules();
         }
 
         self.install_state = None;
@@ -844,13 +892,16 @@ impl App {
         self.view_offset = self.previous_view_offset;
     }
 
-    /// Discover and load modules from all configured directories.
-    /// Returns module states, expanded search_dirs paths, and the loaded config.
+    /// Discover and load modules from the built-in catalog and all configured
+    /// directories.
+    ///
+    /// Returns module states, expanded search_dirs paths, the loaded config, and
+    /// the ids of installed modules the catalog now supersedes.
     fn load_modules_and_config(
         cli_module_dirs: Vec<String>,
         cli_search_dirs: Vec<String>,
         directory_mode: bool,
-    ) -> (Vec<ModuleState>, Vec<PathBuf>, AppConfig) {
+    ) -> (Vec<ModuleState>, Vec<PathBuf>, AppConfig, Vec<String>) {
         // Load config file (warnings on failure, use defaults)
         let config = match AppConfig::load() {
             Ok(config) => config,
@@ -880,38 +931,47 @@ impl App {
 
         let default_dir = crate::config::default_modules_dir();
 
-        let (modules, warnings) = manager::load_all_modules(default_dir, &extra_dirs);
+        let loaded = manager::load_all_modules(default_dir, &extra_dirs, &config.modules);
 
         // Log warnings to stderr (they won't be visible in the TUI but are
         // available if the user redirects stderr)
-        for warning in &warnings {
+        for warning in &loaded.warnings {
             eprintln!("warning: {}", warning);
         }
 
-        let module_states: Vec<ModuleState> = modules
+        let superseded = loaded.superseded;
+
+        let module_states: Vec<ModuleState> = loaded
+            .modules
             .into_iter()
-            .filter_map(|(mut module, manifest_path)| {
+            .filter_map(|loaded| {
+                let manager::LoadedModule {
+                    mut module,
+                    manifest_path,
+                    origin,
+                } = loaded;
                 // In directory mode, only keep local (relative) targets
                 if directory_mode {
                     module
                         .targets
-                        .retain(|t| t.paths.iter().any(|p| p.starts_with("**/")));
+                        .retain(|t| t.local_search_names().next().is_some());
                     if module.targets.is_empty() {
                         return None;
                     }
                 }
                 Some(ModuleState {
                     module,
+                    origin,
                     items: Vec::new(),
                     total_size: None,
                     status: ModuleStatus::Loading,
-                    manifest_path: Some(manifest_path),
+                    manifest_path,
                     update_status: None,
                 })
             })
             .collect();
 
-        (module_states, search_dirs, config)
+        (module_states, search_dirs, config, superseded)
     }
 
     /// Run the main event loop: poll input -> update state -> render.
@@ -1002,7 +1062,7 @@ impl App {
                             ));
                         } else {
                             item.safety_level = level;
-                            ms.items.push(item);
+                            ms.items.push(*item);
                         }
                     }
                 }
@@ -1103,6 +1163,9 @@ impl App {
                     restore_steps: None,
                     risk_level: crate::module::manifest::RiskLevel::default(),
                     ignore_patterns: vec![],
+                    action: cleaner::CleanupAction::Path,
+                    display_path: None,
+                    detail: None,
                 });
             }
         }
@@ -1185,6 +1248,19 @@ impl App {
             return;
         }
 
+        // Inline prompt: trashing items that have no trash equivalent.
+        if self.confirm_irreversible_prompt {
+            match key {
+                KeyCode::Char('y') => self.resolve_irreversible_prompt(true),
+                KeyCode::Char('n') => self.resolve_irreversible_prompt(false),
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.confirm_irreversible_prompt = false;
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // If cleanup action dialog is open, handle its keys
         if self.cleanup_action_dialog {
             match key {
@@ -1196,7 +1272,7 @@ impl App {
                 }
                 KeyCode::Char('t') => {
                     self.cleanup_action_dialog = false;
-                    self.start_cleanup(false);
+                    self.request_trash();
                 }
                 KeyCode::Char('d') => {
                     self.cleanup_action_dialog = false;
@@ -1204,7 +1280,11 @@ impl App {
                 }
                 KeyCode::Enter => {
                     self.cleanup_action_dialog = false;
-                    self.start_cleanup(self.cleanup_action_cursor == 1);
+                    if self.cleanup_action_cursor == 1 {
+                        self.start_cleanup(true);
+                    } else {
+                        self.request_trash();
+                    }
                 }
                 KeyCode::Esc | KeyCode::Char('q') => {
                     self.cleanup_action_dialog = false;
@@ -1444,18 +1524,66 @@ impl App {
         }
     }
 
+    /// Number of checked items that cannot be moved to the trash.
+    pub(crate) fn irreversible_checked_count(&self) -> usize {
+        self.modules
+            .iter()
+            .flat_map(|ms| &ms.items)
+            .filter(|item| self.confirm_checked.contains(&item.path) && !item.reversible())
+            .count()
+    }
+
+    /// Handle a request to trash the checked items.
+    ///
+    /// Some items have no trash equivalent — a simulator is removed by
+    /// `simctl`, which deletes outright. Rather than silently promoting a
+    /// reversible request into a permanent one, ask first.
+    pub(crate) fn request_trash(&mut self) {
+        if self.confirm_checked.is_empty() {
+            return;
+        }
+        if self.irreversible_checked_count() > 0 {
+            self.confirm_irreversible_prompt = true;
+            return;
+        }
+        self.start_cleanup(false);
+    }
+
+    /// Answer the irreversible-items prompt.
+    ///
+    /// `include` keeps them and accepts that they are removed permanently;
+    /// otherwise they are unchecked and only the reversible items are trashed.
+    pub(crate) fn resolve_irreversible_prompt(&mut self, include: bool) {
+        self.confirm_irreversible_prompt = false;
+        if !include {
+            let irreversible: Vec<PathBuf> = self
+                .modules
+                .iter()
+                .flat_map(|ms| &ms.items)
+                .filter(|item| !item.reversible())
+                .map(|item| item.path.clone())
+                .collect();
+            self.confirm_checked.retain(|p| !irreversible.contains(p));
+            if self.confirm_checked.is_empty() {
+                return;
+            }
+        }
+        self.start_cleanup(false);
+    }
+
     /// Spawn cleanup as a background blocking task, transitioning to CleanupProgress view.
     pub(crate) fn start_cleanup(&mut self, permanent: bool) {
         let deduped = crate::tui::views::cleanup_confirm::dedup_paths(&self.confirm_checked);
         let cleanup_items: Vec<cleaner::CleanupItem> = deduped
             .into_iter()
             .map(|path| {
-                let (ignore_patterns, module_id, size) = self.find_item_metadata(&path);
+                let (ignore_patterns, module_id, size, action) = self.find_item_metadata(&path);
                 cleaner::CleanupItem {
                     path,
                     ignore_patterns,
                     module_id,
                     size,
+                    action,
                 }
             })
             .collect();
@@ -1515,7 +1643,10 @@ impl App {
 
     /// Look up ignore patterns for a path from module items.
     /// Look up metadata for a cleanup item: ignore patterns, owning module ID, and size.
-    fn find_item_metadata(&self, path: &Path) -> (Vec<String>, String, Option<u64>) {
+    fn find_item_metadata(
+        &self,
+        path: &Path,
+    ) -> (Vec<String>, String, Option<u64>, cleaner::CleanupAction) {
         for ms in &self.modules {
             for item in &ms.items {
                 if item.path == path {
@@ -1523,11 +1654,18 @@ impl App {
                         item.ignore_patterns.clone(),
                         ms.module.id.clone(),
                         item.size,
+                        item.action.clone(),
                     );
                 }
             }
         }
-        (Vec::new(), String::new(), None)
+        // Drill-in selections are always real paths, never handler items.
+        (
+            Vec::new(),
+            String::new(),
+            None,
+            cleaner::CleanupAction::Path,
+        )
     }
 
     /// Process cleanup messages from the background task.
@@ -1542,14 +1680,23 @@ impl App {
 
         while let Ok(msg) = rx.try_recv() {
             match msg {
-                CleanupMessage::Progress { done, total, path } => {
+                CleanupMessage::Progress {
+                    done,
+                    total,
+                    path,
+                    label,
+                } => {
                     if let Some(progress) = &mut self.cleanup_progress {
                         progress.done = done;
                         progress.total = total;
-                        progress.current_path = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .or_else(|| Some(path.display().to_string()));
+                        // Handler steps supply the command they are running; a
+                        // handler item's path is a synthetic identity that would
+                        // mean nothing here.
+                        progress.current_path = label.or_else(|| {
+                            path.file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .or_else(|| Some(path.display().to_string()))
+                        });
                     }
                 }
                 CleanupMessage::Complete(result) => {
@@ -2007,6 +2154,7 @@ impl App {
             cleanup_cancel: None,
             cleanup_progress: None,
             confirm_checked: BTreeSet::new(),
+            confirm_irreversible_prompt: false,
             cleanup_action_dialog: false,
             cleanup_action_cursor: 0,
             view_offset: 0,
@@ -2063,7 +2211,7 @@ mod tests {
             icon: None,
             icon_color: None,
             targets: vec![Target {
-                paths: vec!["~/test".to_string()],
+                source: crate::module::manifest::TargetSource::Paths(vec!["~/test".to_string()]),
                 description: None,
                 restore: crate::module::manifest::RestoreKind::default(),
                 restore_steps: None,
@@ -2085,6 +2233,7 @@ mod tests {
                 restore_steps: None,
                 risk_level: crate::module::manifest::RiskLevel::default(),
                 ignore_patterns: vec![],
+                ..Default::default()
             })
             .collect();
         ModuleState {
@@ -2092,6 +2241,7 @@ mod tests {
             items,
             total_size: Some(0), // recalculated by sort
             status: ModuleStatus::Ready,
+            origin: crate::module::manager::ModuleOrigin::User,
             manifest_path: None,
             update_status: None,
         }

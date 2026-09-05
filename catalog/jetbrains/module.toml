@@ -1,0 +1,37 @@
+id = "jetbrains"
+name = "JetBrains IDE Caches"
+version = "1.0.0"
+description = "JetBrains IDE logs, caches, indexes, and temp files."
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+
+[[targets]]
+path = "~/Library/Logs/JetBrains"
+description = "JetBrains IDE logs (macOS)"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.local/share/JetBrains/*/log"
+description = "JetBrains IDE logs (Linux)"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/JetBrains/*/caches"
+description = "JetBrains per-product caches"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/JetBrains/*/index"
+description = "JetBrains code index"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/JetBrains/*/tmp"
+description = "JetBrains temp files"
+risk = "safe"
+restore = "auto"

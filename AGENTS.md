@@ -12,7 +12,7 @@ delete them.
 ```sh
 cargo build --release   # release binary
 cargo build             # debug build
-cargo test              # run tests (minimal: size_fmt only)
+cargo test              # run tests
 cargo clippy            # lint
 cargo check             # type-check without building
 ```
@@ -22,19 +22,31 @@ No CI pipelines are configured. Edition 2021.
 ## Directory layout
 
 ```
+catalog/               Built-in module manifests, embedded at compile time by build.rs.
 src/
   main.rs              CLI entry point (clap). Parses args, boots tokio runtime, launches TUI.
-  app.rs               Central App struct: state, event loop, key handling, View dispatch.
+  app/
+    mod.rs             Central App struct: state, event loop, key handling, View dispatch.
+    types.rs           Item, ModuleState, View, and other shared types.
+    drill.rs           Drill-in (directory browsing) state.
+    filter.rs          Search/filter matching.
   config.rs            User config (~/.config/freespace/config.toml).
   core/
     scanner.rs         Async filesystem scanner. Sends ScanMessage variants over mpsc channel.
     cleaner.rs         Trash (via `trash` crate) and permanent delete logic.
-    engine.rs          Orchestrates scan tasks per module.
+    safety.rs          Path deny/warn classification.
+    audit.rs           JSONL audit log of cleanup operations.
+    stats.rs           Reclaimed-space statistics.
+    paths.rs           Tilde expansion.
+    handlers/
+      mod.rs           Handler trait + the closed registry manifests select from.
+      exec.rs          The only subprocess entry point (argv only, never a shell).
+      xcode.rs         Simulator device and runtime handlers via simctl.
   module/
     manifest.rs        TOML manifest parsing into Module struct.
+    catalog.rs         Loads the built-in catalog embedded from catalog/.
     installer.rs       Git-based module installation.
-    manager.rs         Module discovery and loading from config dir.
-    runtime.rs         Runtime resolution of module patterns.
+    manager.rs         Module discovery, loading, and catalog/user precedence.
     source.rs          Module source types (local, git).
   tui/
     theme.rs           Color palette and style constants.
@@ -63,12 +75,21 @@ Event-driven TUI with background async scanning:
 
 ## Module system
 
-Modules are declarative TOML manifests — no code execution.
+freespace ships a built-in catalog (`catalog/`, embedded by `build.rs`), so it is
+complete without installing anything. Installed TOML modules are a secondary
+extension point.
 
-- Default location: `~/.config/freespace/modules/`
-- Git-distributable: `freespace install <git-url>`
-- Platform-filtered via `platform` field (macos/linux/windows)
-- Use `glob` patterns and `local_target` paths to discover items
+- Built-in: `catalog/<name>/module.toml`, disabled via `[modules]` in config.toml
+- User modules: `~/.config/freespace/modules/` plus `module_dirs`
+- A user module with the same `id` as a built-in replaces it
+- Git-distributable: `freespace module install <source>`
+- Platform-filtered via `platforms` field (macos/linux/windows)
+
+Manifests are declarative and cannot specify commands. A target declares either
+path patterns or the name of a **handler** — a compiled-in integration selected
+from a closed set (`core::handlers`), rejected at parse time if unknown. Handlers
+exist for cleanup that isn't path-shaped: `xcrun simctl delete <UDID>` rather than
+trashing a CoreSimulator directory and corrupting its registry.
 
 ## UI Design Guide
 
@@ -105,3 +126,6 @@ Read it before modifying any view, widget, or keybinding. Key rules:
 - **Cross-platform `libc` casts:** `libc::statvfs` fields differ in type across platforms (e.g. `u32` on macOS, `u64` on Linux). Use `#[allow(clippy::unnecessary_cast)]` on functions that cast these fields to `u64` so clippy passes on all targets.
 - **View-based navigation:** Directory browsing always uses `View::FileBrowser`. New views that need directory browsing should transition to FileBrowser with `browser_origin` set — never embed drill logic inline.
 - **View transitions:** Always use `self.set_view(view)` instead of direct `self.current_view = view` assignment — it resets `view_offset` automatically to prevent stale scroll positions.
+- **Handler items are not files:** Items produced by a `core::handlers` handler are keyed by a synthetic *relative* path (`freespace-handler/<handler>/<id>`) so they flow through the existing `BTreeSet<PathBuf>` selection machinery without ever colliding with a real target path. Their real location, if any, is `Item::display_path` and is display-only. `Item::action` — never the path's shape — decides how an item is removed, and handler actions deliberately skip `check_safety` because path safety answers the wrong question for an operation that unlinks nothing. Handlers also supply their own sizes, so these items skip the scanner's sizing pass.
+- **Adding a field to `Item`, `Target`, or `ModuleState`:** these are constructed literally in ~8 test fixtures. `Item` and `Target` derive `Default`, so fixtures use `..Default::default()` — prefer adding a defaulted field over touching every fixture.
+- **`cleanup_confirm.rs` sub-rows:** any new sub-line must be added to *both* `render_items_list` and `visual_row_to_item_index`, in the same order, or mouse-click mapping silently desyncs from what's on screen.

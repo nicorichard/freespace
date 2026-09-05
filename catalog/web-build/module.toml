@@ -1,0 +1,102 @@
+id = "web-build"
+name = "Web Framework Build Caches"
+version = "1.0.0"
+description = "Project-local build output and caches from web frameworks."
+author = "freespace"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "**/.next"
+description = "Next.js build output"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.nuxt"
+description = "Nuxt.js build output"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.turbo"
+description = "Turborepo local cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.parcel-cache"
+description = "Parcel bundler cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.angular"
+description = "Angular CLI cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.vite"
+description = "Vite dev server cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.svelte-kit"
+description = "SvelteKit build output"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.docusaurus"
+description = "Docusaurus build cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.astro"
+description = "Astro build cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.swc"
+description = "SWC compiler cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.nx"
+description = "Nx monorepo cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.expo"
+description = "Expo project cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.vercel"
+description = "Vercel CLI build output"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.serverless"
+description = "Serverless Framework packaged artifacts"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.sass-cache"
+description = "Legacy node-sass compilation cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.nyc_output"
+description = "NYC coverage intermediate data"
+risk = "safe"
+restore = "auto"

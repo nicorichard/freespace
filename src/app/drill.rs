@@ -156,6 +156,7 @@ mod tests {
             restore_steps: None,
             risk_level: crate::module::manifest::RiskLevel::default(),
             ignore_patterns: vec![],
+            ..Default::default()
         }
     }
 

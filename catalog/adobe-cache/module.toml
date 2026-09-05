@@ -1,0 +1,42 @@
+id = "adobe-cache"
+name = "Adobe Caches"
+version = "1.0.0"
+description = "Adobe Creative Cloud media caches, GPU caches, and logs."
+author = "freespace"
+platforms = ["macos"]
+
+[[targets]]
+path = "~/Library/Application Support/Adobe/Common/Media Cache Files"
+description = "Adobe media cache files (Premiere, After Effects)"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Adobe/Common/Media Cache"
+description = "Adobe media cache database"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "/Library/Logs/Adobe"
+description = "Adobe application logs"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "/Library/Logs/CreativeCloud"
+description = "Creative Cloud installer and updater logs"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Adobe/Common/GPU Caches"
+description = "Adobe GPU shader cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Adobe/CRLogs"
+description = "Adobe crash logs"
+risk = "safe"
+restore = "auto"

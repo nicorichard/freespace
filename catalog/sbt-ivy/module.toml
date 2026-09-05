@@ -1,0 +1,24 @@
+id = "sbt-ivy"
+name = "SBT & Ivy Caches"
+version = "1.0.0"
+description = "Scala SBT and Apache Ivy dependency caches"
+author = "freespace"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "~/.sbt/boot"
+description = "SBT bootstrap compiler downloads"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.sbt/preloaded"
+description = "SBT preloaded library cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.ivy2/cache"
+description = "Apache Ivy dependency cache"
+risk = "safe"
+restore = "auto"

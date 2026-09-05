@@ -96,6 +96,18 @@ enum ModuleCommand {
         #[arg(default_value = ".")]
         source: String,
     },
+    /// Disable a built-in module
+    Disable {
+        /// ID of the built-in module to disable
+        id: String,
+    },
+    /// Re-enable a disabled built-in module
+    Enable {
+        /// ID of the built-in module to re-enable
+        id: String,
+    },
+    /// Remove installed modules that are now built in
+    PruneVendored,
 }
 
 #[tokio::main]
@@ -186,10 +198,21 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         Some(Command::Module { command }) => {
-            // Validate doesn't need the installed modules directory
-            if let ModuleCommand::Validate { source } = command {
-                cmd_validate(&source)?;
-                return Ok(());
+            // These don't need the installed modules directory
+            match command {
+                ModuleCommand::Validate { source } => {
+                    cmd_validate(&source)?;
+                    return Ok(());
+                }
+                ModuleCommand::Disable { id } => {
+                    cmd_set_builtin_enabled(&id, false)?;
+                    return Ok(());
+                }
+                ModuleCommand::Enable { id } => {
+                    cmd_set_builtin_enabled(&id, true)?;
+                    return Ok(());
+                }
+                _ => {}
             }
 
             let modules_dir = config::default_modules_dir()
@@ -219,7 +242,12 @@ async fn main() -> anyhow::Result<()> {
                 ModuleCommand::Outdated => {
                     cmd_outdated(&modules_dir);
                 }
-                ModuleCommand::Validate { .. } => unreachable!(),
+                ModuleCommand::PruneVendored => {
+                    cmd_prune_vendored(&modules_dir)?;
+                }
+                ModuleCommand::Validate { .. }
+                | ModuleCommand::Disable { .. }
+                | ModuleCommand::Enable { .. } => unreachable!("handled above"),
             }
         }
     }
@@ -229,15 +257,44 @@ async fn main() -> anyhow::Result<()> {
 
 /// List all installed modules with source information.
 fn cmd_list(modules_dir: &std::path::Path) {
+    let cfg = config::AppConfig::load().unwrap_or_default();
+
+    let mut found = false;
+    let header = |found: &mut bool| {
+        if !*found {
+            println!("{:<24} {:<22} {:<10} SOURCE", "ID", "NAME", "VERSION");
+            *found = true;
+        }
+    };
+
+    // Built-in modules first — they are what the user gets without installing
+    // anything, so they belong at the top of the list.
+    if cfg.modules.builtin {
+        let (builtins, _) = module::catalog::load_catalog(&[]);
+        for module in builtins {
+            header(&mut found);
+            let source = if cfg.modules.is_disabled(&module.id) {
+                "built-in (disabled)"
+            } else {
+                "built-in"
+            };
+            println!(
+                "{:<24} {:<22} {:<10} {}",
+                module.id, module.name, module.version, source
+            );
+        }
+    }
+
     let entries = match fs::read_dir(modules_dir) {
         Ok(e) => e,
         Err(_) => {
-            println!("No modules installed.");
+            if !found {
+                println!("No modules available.");
+            }
             return;
         }
     };
 
-    let mut found = false;
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
@@ -260,10 +317,7 @@ fn cmd_list(modules_dir: &std::path::Path) {
 
         let source = module::installer::read_source_info(&path);
 
-        if !found {
-            println!("{:<20} {:<20} {:<10} SOURCE", "ID", "NAME", "VERSION");
-            found = true;
-        }
+        header(&mut found);
 
         let source_str = match source {
             Some(s) => s.repository,
@@ -271,17 +325,104 @@ fn cmd_list(modules_dir: &std::path::Path) {
         };
 
         println!(
-            "{:<20} {:<20} {:<10} {}",
+            "{:<24} {:<22} {:<10} {}",
             module.id, module.name, module.version, source_str
         );
     }
 
     if !found {
-        println!("No modules installed.");
+        println!("No modules available.");
     }
 }
 
 /// Remove an installed module by id.
+/// Enable or disable a built-in module by editing config.toml.
+fn cmd_set_builtin_enabled(id: &str, enable: bool) -> anyhow::Result<()> {
+    let available = module::catalog::catalog_ids();
+    if !available.iter().any(|c| c == id) {
+        anyhow::bail!(
+            "'{}' is not a built-in module on this platform. Run `freespace module list` to see what is available.",
+            id
+        );
+    }
+
+    let mut cfg = config::AppConfig::load()?;
+    let changed = if enable {
+        cfg.modules.enable(id)
+    } else {
+        cfg.modules.disable(id)
+    };
+
+    if !changed {
+        println!(
+            "'{}' is already {}.",
+            id,
+            if enable { "enabled" } else { "disabled" }
+        );
+        return Ok(());
+    }
+
+    cfg.save()?;
+    println!(
+        "{} built-in module '{}'.",
+        if enable { "Enabled" } else { "Disabled" },
+        id
+    );
+    Ok(())
+}
+
+/// Remove installed modules that the built-in catalog now supersedes.
+fn cmd_prune_vendored(modules_dir: &std::path::Path) -> anyhow::Result<()> {
+    let builtin_ids = module::catalog::catalog_ids();
+    let mut removed = Vec::new();
+
+    let entries = match fs::read_dir(modules_dir) {
+        Ok(entries) => entries,
+        Err(_) => {
+            println!("No installed modules.");
+            return Ok(());
+        }
+    };
+
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Some(source) = module::installer::read_source_info(&dir) else {
+            continue;
+        };
+        if source.repository != config::COMMUNITY_MODULES_SOURCE {
+            continue;
+        }
+        // Only prune when the catalog genuinely replaces it, so a module that
+        // was dropped from the catalog is left alone rather than silently lost.
+        let Ok(manifest) = fs::read_to_string(dir.join("module.toml")) else {
+            continue;
+        };
+        let Ok(parsed) = module::manifest::Module::parse(&manifest) else {
+            continue;
+        };
+        let id = parsed.id;
+        if !builtin_ids.iter().any(|b| b == &id) {
+            continue;
+        }
+        fs::remove_dir_all(&dir)?;
+        removed.push(id);
+    }
+
+    if removed.is_empty() {
+        println!("Nothing to prune — no installed modules are superseded by built-ins.");
+    } else {
+        removed.sort();
+        println!("Removed {} superseded module(s):", removed.len());
+        for id in &removed {
+            println!("  {}", id);
+        }
+    }
+    Ok(())
+}
+
 fn cmd_remove(modules_dir: &std::path::Path, id: &str) -> anyhow::Result<()> {
     let module_dir = find_module_dir(modules_dir, id)?;
     fs::remove_dir_all(&module_dir)?;
@@ -291,10 +432,23 @@ fn cmd_remove(modules_dir: &std::path::Path, id: &str) -> anyhow::Result<()> {
 
 /// Inspect an installed module's manifest and source information.
 fn cmd_inspect(modules_dir: &std::path::Path, id: &str) -> anyhow::Result<()> {
-    let module_dir = find_module_dir(modules_dir, id)?;
+    // An installed module with this id shadows the built-in of the same name,
+    // matching the precedence the TUI applies.
+    let module_dir = find_module_dir(modules_dir, id).ok();
 
-    let manifest_content = fs::read_to_string(module_dir.join("module.toml"))?;
-    let module = module::manifest::Module::parse(&manifest_content)?;
+    let module = match &module_dir {
+        Some(dir) => {
+            let manifest_content = fs::read_to_string(dir.join("module.toml"))?;
+            module::manifest::Module::parse(&manifest_content)?
+        }
+        None => {
+            let (builtins, _) = module::catalog::load_catalog(&[]);
+            builtins
+                .into_iter()
+                .find(|m| m.id == id)
+                .ok_or_else(|| anyhow::anyhow!("module '{}' not found", id))?
+        }
+    };
 
     println!("Id: {}", module.id);
     println!("Module: {}", module.name);
@@ -307,10 +461,31 @@ fn cmd_inspect(modules_dir: &std::path::Path, id: &str) -> anyhow::Result<()> {
     println!("Targets:");
     for target in &module.targets {
         let desc = target.description.as_deref().unwrap_or("(no description)");
-        println!("  {} - {}", target.paths.join(", "), desc);
+        let what = match target.handler() {
+            Some(handler) => format!("handler {}", handler),
+            None => target.paths().join(", "),
+        };
+        println!("  {} - {}", what, desc);
     }
 
-    if let Some(source) = module::installer::read_source_info(&module_dir) {
+    let source_info = module_dir
+        .as_ref()
+        .and_then(|dir| module::installer::read_source_info(dir));
+
+    if module_dir.is_none() {
+        println!();
+        println!("Source:");
+        println!("  Built in to freespace (no install required)");
+        let cfg = config::AppConfig::load().unwrap_or_default();
+        if cfg.modules.is_disabled(&module.id) {
+            println!(
+                "  Disabled — re-enable with `freespace module enable {}`",
+                module.id
+            );
+        }
+    }
+
+    if let Some(source) = source_info {
         println!();
         println!("Source:");
         println!("  Repository: {}", source.repository);

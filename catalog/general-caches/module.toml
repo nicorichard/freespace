@@ -1,0 +1,18 @@
+id = "general-caches"
+name = "General Caches"
+version = "1.0.0"
+description = "General application caches."
+author = "freespace"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "~/Library/Caches/*"
+description = "macOS application caches"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.cache/*"
+description = "XDG cache directory (Linux and some macOS apps)"
+risk = "safe"
+restore = "auto"

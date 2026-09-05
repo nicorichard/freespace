@@ -1,0 +1,64 @@
+id = "xcode-extras"
+name = "Xcode Extras"
+version = "1.0.0"
+description = "Xcode archives, caches, device logs, and dependency managers"
+author = "freespace"
+platforms = ["macos"]
+icon = ""
+
+[[targets]]
+path = "~/Library/Developer/Xcode/Archives"
+description = "Xcode build archives (may contain App Store submissions)"
+risk = "medium"
+restore = "manual"
+restore_steps = "Review before deleting — may contain App Store submissions"
+
+[[targets]]
+path = "~/Library/Developer/CoreSimulator/Caches"
+description = "iOS/watchOS/tvOS simulator caches"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Developer/Xcode/iOS Device Logs"
+description = "Logs from connected iOS devices"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Developer/Xcode/watchOS Device Logs"
+description = "Logs from connected watchOS devices"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Caches/CocoaPods"
+description = "CocoaPods spec and download cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Developer/Xcode/UserData/IB Support"
+description = "Interface Builder support caches"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Developer/Xcode/Products"
+description = "Old product archives"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/Pods"
+description = "CocoaPods installed dependencies (project-local)"
+risk = "low"
+restore = "manual"
+restore_steps = "Run `pod install` in the project directory"
+
+[[targets]]
+path = "~/Library/Developer/XCTestDevices"
+description = "Simulator clones created for parallel test runs"
+risk = "low"
+restore = "auto"
+restore_steps = "Recreated automatically on the next parallel test run"

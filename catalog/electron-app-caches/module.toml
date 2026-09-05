@@ -1,0 +1,151 @@
+id = "electron-app-caches"
+name = "Electron App Caches"
+version = "1.0.0"
+description = "Caches from Electron-based apps stored outside ~/Library/Caches. Rebuilt on next app launch."
+author = "freespace"
+platforms = ["macos"]
+icon = ""
+
+[[targets]]
+path = "~/Library/Application Support/Code/Cache"
+description = "VS Code cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Code/CachedData"
+description = "VS Code cached extension data"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Code/CachedExtensionVSIXs"
+description = "VS Code cached extension packages"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Code/Code Cache"
+description = "VS Code V8 code cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Code/logs"
+description = "VS Code logs"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Cursor/Cache"
+description = "Cursor IDE cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Cursor/CachedData"
+description = "Cursor IDE cached data"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Cursor/Code Cache"
+description = "Cursor IDE V8 code cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Cursor/logs"
+description = "Cursor IDE logs"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/discord/Cache"
+description = "Discord cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/discord/Code Cache"
+description = "Discord V8 code cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Slack/Cache"
+description = "Slack cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Slack/Code Cache"
+description = "Slack V8 code cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Slack/Service Worker/CacheStorage"
+description = "Slack service worker cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Notion/Cache"
+description = "Notion cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Notion/Code Cache"
+description = "Notion V8 code cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/obsidian/Cache"
+description = "Obsidian cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/obsidian/Code Cache"
+description = "Obsidian V8 code cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Linear/Cache"
+description = "Linear cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Linear/Code Cache"
+description = "Linear V8 code cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/1Password/Cache"
+description = "1Password cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Postman/Cache"
+description = "Postman cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Postman/Code Cache"
+description = "Postman V8 code cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/Loom/Cache"
+description = "Loom cache"
+risk = "safe"
+restore = "auto"

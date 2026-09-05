@@ -1,0 +1,12 @@
+id = "nuget"
+name = "NuGet Cache"
+version = "1.0.0"
+description = ".NET NuGet package cache"
+author = "freespace"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "~/.nuget/packages"
+description = "NuGet global package cache"
+risk = "safe"
+restore = "auto"

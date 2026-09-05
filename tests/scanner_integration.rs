@@ -19,7 +19,7 @@ fn make_global_module(name: &str, path: &str) -> Module {
         icon: None,
         icon_color: None,
         targets: vec![Target {
-            paths: vec![path.to_string()],
+            source: freespace::module::manifest::TargetSource::Paths(vec![path.to_string()]),
             description: None,
             restore: freespace::module::manifest::RestoreKind::default(),
             restore_steps: None,
@@ -41,7 +41,10 @@ fn make_local_module(name: &str, dir_name: &str) -> Module {
         icon: None,
         icon_color: None,
         targets: vec![Target {
-            paths: vec![format!("**/{}", dir_name)],
+            source: freespace::module::manifest::TargetSource::Paths(vec![format!(
+                "**/{}",
+                dir_name
+            )]),
             description: None,
             restore: freespace::module::manifest::RestoreKind::default(),
             restore_steps: None,
@@ -227,4 +230,60 @@ async fn scan_glob_pattern() {
     }
 
     assert_eq!(item_count, 2); // dir-one and dir-two, not file.txt
+}
+
+/// End-to-end: the built-in `xcode-simulators` manifest resolves its handlers
+/// and the scanner emits correctly-shaped items for them.
+///
+/// Ignored because what it finds depends on the machine's Xcode install; run
+/// with `cargo test --test scanner_integration -- --ignored`.
+#[tokio::test]
+#[ignore]
+async fn xcode_simulators_module_scans_end_to_end() {
+    use freespace::core::cleaner::CleanupAction;
+    use freespace::core::scanner::ScanMessage;
+
+    let (builtins, warnings) = freespace::module::catalog::load_catalog(&[]);
+    assert!(warnings.is_empty(), "catalog warnings: {warnings:?}");
+
+    let Some(module) = builtins.into_iter().find(|m| m.id == "xcode-simulators") else {
+        eprintln!("xcode-simulators not available on this platform");
+        return;
+    };
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    freespace::core::scanner::start_scan(vec![module], tx, Vec::new());
+
+    let mut items = Vec::new();
+    while let Some(msg) = rx.recv().await {
+        match msg {
+            ScanMessage::ItemDiscovered { item, .. } => items.push(item),
+            ScanMessage::ModuleError { error, .. } => panic!("scan error: {error}"),
+            ScanMessage::ScanComplete => break,
+            _ => {}
+        }
+    }
+
+    eprintln!("discovered {} simulator item(s)", items.len());
+    for item in &items {
+        eprintln!("  {} ({:?} bytes)", item.name, item.size);
+
+        // Every item must be handler-backed, sized up front, and irreversible.
+        assert!(
+            matches!(item.action, CleanupAction::Handler { .. }),
+            "{} should be handler-backed",
+            item.name
+        );
+        assert!(!item.reversible(), "simulator removals cannot be undone");
+        assert!(item.size.is_some(), "handlers supply their own sizes");
+
+        // The identity must be synthetic, never a real path we might unlink.
+        assert!(item.path.is_relative(), "identity must be relative");
+        assert!(!item.path.exists(), "identity must not be a real file");
+
+        // And the command shown must be the supported simctl API.
+        let command = item.action.removal_command().expect("handler command");
+        assert!(command.starts_with("xcrun simctl "), "got: {command}");
+        eprintln!("    -> {command}");
+    }
 }

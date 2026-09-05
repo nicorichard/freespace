@@ -1,0 +1,13 @@
+id = "messages"
+name = "iMessage Attachments"
+version = "1.0.0"
+description = "iMessage media attachments. Review before deleting — may not be re-downloadable."
+author = "freespace"
+platforms = ["macos"]
+
+[[targets]]
+path = "~/Library/Messages/Attachments"
+description = "iMessage photo, video, and file attachments"
+risk = "medium"
+restore = "manual"
+restore_steps = "Review contents before deleting — not re-downloaded if removed from iCloud"

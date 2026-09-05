@@ -27,11 +27,13 @@ cargo build --release
 
 ## Why Freespace
 
-**Community cleanup protocols** — Anyone can write and share a module. If you use a tool that accumulates disk waste, chances are someone's already written a module for it.
+**Complete out of the box** — Ships knowing about 50+ tools: Docker, Xcode, npm, Homebrew, Gradle, Steam, and the rest. No install step, no separate module repo to clone.
 
-**Declarative & safe** — Modules are plain TOML manifests. No scripts, no code execution. You can read and audit every module in seconds.
+**Declarative & safe** — Modules are plain TOML manifests. A manifest declares paths, or names one of freespace's built-in handlers; it can never specify a command of its own. You can read and audit every module in seconds.
 
-**Git-native sharing** — Install modules from any GitHub repo with one command. Fork, customize, share back.
+**Correct, not just thorough** — Some things break if you just delete their directory. Simulator devices and runtimes are removed through `xcrun simctl`, which keeps CoreSimulator's registry consistent, and freespace shows you the exact command before it runs anything.
+
+**Extensible** — Add your own TOML module for paths freespace doesn't know about, install one from any Git repo, or override a built-in by shipping a module with the same id.
 
 ## What a module looks like
 

@@ -1,0 +1,31 @@
+id = "system-extras"
+name = "macOS System Extras"
+version = "1.0.0"
+description = "Additional macOS system caches and index data outside ~/Library/Caches."
+author = "freespace"
+platforms = ["macos"]
+icon = ""
+
+[[targets]]
+path = "~/Library/Metadata/CoreSpotlight"
+description = "CoreSpotlight index data (can balloon to 100+ GB if corrupted)"
+risk = "medium"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Containers/com.apple.mediaanalysisd/Data/Library/Caches"
+description = "Media analysis daemon cache (photo/video ML)"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Application Support/coreMLCache"
+description = "CoreML compiled model cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Containers/com.apple.Photos/Data/Library/Caches"
+description = "Photos analysis and face recognition cache"
+risk = "safe"
+restore = "auto"

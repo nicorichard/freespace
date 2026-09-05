@@ -451,7 +451,7 @@ mod tests {
             icon: None,
             icon_color: None,
             targets: vec![Target {
-                paths: vec!["~/test".to_string()],
+                source: crate::module::manifest::TargetSource::Paths(vec!["~/test".to_string()]),
                 description: None,
                 restore: crate::module::manifest::RestoreKind::default(),
                 restore_steps: None,
@@ -473,6 +473,7 @@ mod tests {
                 restore_steps: None,
                 risk_level: crate::module::manifest::RiskLevel::default(),
                 ignore_patterns: vec![],
+                ..Default::default()
             })
             .collect();
         let total: u64 = items.iter().filter_map(|i| i.size).sum();
@@ -481,6 +482,7 @@ mod tests {
             items,
             total_size: Some(total),
             status: ModuleStatus::Ready,
+            origin: crate::module::manager::ModuleOrigin::User,
             manifest_path: None,
             update_status: None,
         }

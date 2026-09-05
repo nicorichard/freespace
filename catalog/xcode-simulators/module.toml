@@ -1,0 +1,38 @@
+id = "xcode-simulators"
+name = "Xcode Simulators"
+version = "1.0.0"
+description = "Stale simulator devices and runtimes, removed through simctl"
+author = "freespace"
+platforms = ["macos"]
+tags = ["xcode", "ios", "simulator", "developer"]
+icon = "U+F179"
+
+# Simulator devices and runtimes are registered with CoreSimulator, so deleting
+# their directories reclaims the bytes but leaves Xcode listing devices that
+# cannot boot. Both targets below delegate to built-in handlers that use the
+# supported `simctl` commands, which update the registry as they delete.
+#
+# Neither operation can be undone — there is no Trash equivalent — so freespace
+# shows the exact command for every selected item before running anything.
+
+[[targets]]
+handler = "xcode.simulator-devices"
+description = "Simulator devices whose runtime is no longer installed"
+risk = "medium"
+restore = "manual"
+restore_steps = [
+  "These devices cannot boot: the runtime they need is gone.",
+  "Recreate one in Xcode → Window → Devices and Simulators, or with `xcrun simctl create`.",
+  "Installed apps, app data, and settings on the device are lost.",
+]
+
+[[targets]]
+handler = "xcode.simulator-runtimes"
+description = "Installed simulator runtimes (multi-gigabyte platform images)"
+risk = "high"
+restore = "manual"
+restore_steps = [
+  "Re-download in Xcode → Settings → Components, or with `xcrun simctl runtime add`.",
+  "Devices using the runtime stop booting until it is reinstalled.",
+  "Runtimes still selected by an installed Xcode SDK are flagged — removing one forces a multi-gigabyte re-download on the next build.",
+]

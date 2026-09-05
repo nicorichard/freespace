@@ -1,0 +1,42 @@
+id = "docker"
+name = "Docker & Containers"
+version = "1.0.0"
+description = "Disk images and build caches for Docker Desktop, Colima, OrbStack, and Minikube."
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+icon_color = "#2496ED"
+
+[[targets]]
+path = "~/Library/Containers/com.docker.docker/Data/vms/0/data"
+description = "Docker Desktop VM disk image (macOS)"
+risk = "low"
+restore = "manual"
+restore_steps = "Re-created on Docker Desktop restart; images need re-pulling"
+
+[[targets]]
+path = "~/.docker/buildx"
+description = "Docker Buildx build cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.colima/data"
+description = "Colima VM disk image"
+risk = "low"
+restore = "manual"
+restore_steps = "Re-created by `colima start`; images need re-pulling"
+
+[[targets]]
+path = "~/.orbstack/data"
+description = "OrbStack container/VM data"
+risk = "low"
+restore = "manual"
+restore_steps = "Re-created by OrbStack; images need re-pulling"
+
+[[targets]]
+path = "~/.minikube"
+description = "Minikube VM images and cluster data"
+risk = "low"
+restore = "manual"
+restore_steps = "Re-created by `minikube start`"

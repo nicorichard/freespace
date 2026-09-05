@@ -10,9 +10,48 @@ search_dirs = ["~/Projects", "~/Work"]
 audit_log = true
 protected_paths = ["~/Work/important-project", "~/Documents"]
 enforce_scope = true
+
+[modules]
+builtin = true
+disabled = ["steam", "spotify"]
 ```
 
 ## Fields
+
+### `[modules]`
+
+Controls the built-in module catalog that ships inside the binary.
+
+#### `modules.builtin`
+
+- **Type:** boolean
+- **Default:** `true`
+
+When false, the entire built-in catalog is skipped and only modules installed
+under `~/.config/freespace/modules/` (plus `module_dirs`) load.
+
+#### `modules.disabled`
+
+- **Type:** list of strings
+- **Default:** `[]`
+
+Ids of individual built-in modules to skip.
+
+```toml
+[modules]
+disabled = ["steam", "spotify"]
+```
+
+The CLI edits this for you:
+
+```sh
+freespace module disable steam
+freespace module enable steam
+freespace module list            # built-ins marked "built-in" / "built-in (disabled)"
+```
+
+To customise a built-in rather than disable it, install a module with the same
+`id` — a user module always replaces the built-in it shadows.
 
 ### `module_dirs`
 
@@ -73,4 +112,5 @@ enforce_scope = true
 
 - The `dry_run` mode is controlled via the `--dry-run` CLI flag, not the config file.
 - The config directory is always `~/.config/freespace/`, regardless of platform.
-- Modules are loaded from `~/.config/freespace/modules/` by default, plus any paths listed in `module_dirs`.
+- Modules are loaded from the built-in catalog first, then `~/.config/freespace/modules/`, then any paths listed in `module_dirs`. A user module replaces a built-in with the same `id`.
+- If you previously installed `github:nicorichard/freespace-modules`, those modules are now built in. The installed copies are ignored in favour of the built-ins; remove them with `freespace module prune-vendored`.

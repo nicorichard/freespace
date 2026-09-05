@@ -1,0 +1,19 @@
+id = "unity"
+name = "Unity Caches"
+version = "1.0.0"
+description = "Unity Editor global caches and Asset Store downloads."
+author = "freespace"
+platforms = ["macos"]
+icon = ""
+
+[[targets]]
+path = "~/Library/Unity/Asset Store-5.x"
+description = "Unity Asset Store download cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Unity/cache"
+description = "Unity Editor global cache"
+risk = "safe"
+restore = "auto"

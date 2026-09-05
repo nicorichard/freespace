@@ -1,0 +1,18 @@
+id = "ccache-sccache"
+name = "C/C++ Compilation Caches"
+version = "1.0.0"
+description = "Compilation caches from ccache and sccache."
+author = "freespace"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "~/.ccache"
+description = "ccache compilation cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.cache/sccache"
+description = "sccache compilation cache"
+risk = "safe"
+restore = "auto"

@@ -1,0 +1,31 @@
+id = "flutter-dart"
+name = "Flutter & Dart Caches"
+version = "1.0.0"
+description = "Dart pub package cache and Flutter engine artifacts."
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+
+[[targets]]
+path = "~/.pub-cache/hosted"
+description = "Dart pub hosted package cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.pub-cache/git"
+description = "Dart pub git dependency cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Caches/flutter_engine"
+description = "Flutter engine build artifacts (macOS)"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.dart_tool"
+description = "Dart tool cache (project-local)"
+risk = "safe"
+restore = "auto"

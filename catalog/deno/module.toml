@@ -1,0 +1,13 @@
+id = "deno"
+name = "Deno Cache"
+version = "1.0.0"
+description = "Deno module cache and npm compatibility cache."
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+
+[[targets]]
+path = "~/.deno/npm"
+description = "Deno npm compatibility cache"
+risk = "safe"
+restore = "auto"

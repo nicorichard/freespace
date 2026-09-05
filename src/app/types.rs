@@ -29,10 +29,13 @@ pub enum View {
 /// State for a single loaded module including its discovered items.
 pub struct ModuleState {
     pub module: Module,
+    /// Whether this module is vendored into the binary or came from disk.
+    pub origin: crate::module::manager::ModuleOrigin,
     pub items: Vec<Item>,
     pub total_size: Option<u64>,
     pub status: ModuleStatus,
     /// Filesystem path to the module's manifest (module.toml).
+    /// `None` for built-in modules, which have no file on disk.
     pub manifest_path: Option<PathBuf>,
     /// Result of the background update check (None = not checked yet).
     pub update_status: Option<ModuleUpdateStatus>,
@@ -81,7 +84,13 @@ pub enum ScanStatus {
     Complete,
 }
 
-/// A discovered filesystem item within a module.
+/// A discovered item within a module.
+///
+/// Usually a real file or directory. Handler-backed items also appear here, but
+/// their `path` is a synthetic identity (see
+/// [`crate::core::handlers::identity_path`]) rather than something on disk —
+/// `action` is the authority on how an item is removed, never the path.
+#[derive(Default)]
 pub struct Item {
     pub name: String,
     pub path: PathBuf,
@@ -99,10 +108,35 @@ pub struct Item {
     pub risk_level: crate::module::manifest::RiskLevel,
     /// Glob patterns for files/directories to preserve when cleaning this item.
     pub ignore_patterns: Vec<String>,
+    /// How this item is removed. Path items are trashed or unlinked; handler
+    /// items are removed through their tool's own supported command.
+    pub action: crate::core::cleaner::CleanupAction,
+    /// Real filesystem location for a handler item, shown for context only.
+    /// `None` for path items, whose `path` is already the real location.
+    pub display_path: Option<PathBuf>,
+    /// Extra context from a handler (version, last-used date, ...).
+    pub detail: Option<String>,
+}
+
+impl Item {
+    /// Whether removal can be undone. Trashing a path can; a handler command
+    /// cannot, because there is no Trash equivalent for `simctl delete`.
+    /// Derived from `action` so the two can never disagree.
+    pub fn reversible(&self) -> bool {
+        self.action.is_reversible()
+    }
+
+    /// The location to show the user: a handler item's real path when it has
+    /// one, otherwise its own path.
+    pub fn shown_path(&self) -> &std::path::Path {
+        self.display_path.as_deref().unwrap_or(&self.path)
+    }
 }
 
 /// The type of a discovered filesystem item.
+#[derive(Default)]
 pub enum ItemType {
+    #[default]
     File,
     Directory,
 }

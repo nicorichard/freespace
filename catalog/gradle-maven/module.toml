@@ -1,0 +1,55 @@
+id = "gradle-maven"
+name = "Gradle & Maven Caches"
+version = "1.0.0"
+description = "Java/Kotlin build tool caches."
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+
+[[targets]]
+path = "~/.gradle/caches"
+description = "Gradle dependency and build caches"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.gradle/wrapper"
+description = "Gradle wrapper distribution downloads"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.gradle/daemon"
+description = "Gradle daemon logs and registry"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.m2/repository"
+description = "Maven local repository cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.gradle/native"
+description = "Gradle native platform libraries"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.gradle/notifications"
+description = "Gradle update notifications"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.gradle/build-scan-data"
+description = "Gradle build scan temporary data"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.gradle"
+description = "Per-project Gradle cache and wrapper metadata"
+risk = "safe"
+restore = "auto"

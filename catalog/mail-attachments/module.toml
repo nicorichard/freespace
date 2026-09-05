@@ -1,0 +1,12 @@
+id = "mail-attachments"
+name = "Mail Downloads"
+version = "1.0.0"
+description = "Attachments viewed in Apple Mail"
+author = "freespace"
+platforms = ["macos"]
+
+[[targets]]
+path = "~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads"
+description = "Mail attachment downloads"
+risk = "safe"
+restore = "auto"

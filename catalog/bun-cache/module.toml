@@ -1,0 +1,12 @@
+id = "bun-cache"
+name = "Bun Cache"
+version = "1.0.0"
+description = "Bun package manager install cache."
+author = "freespace"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "~/.bun/install/cache"
+description = "Bun cached package downloads"
+risk = "safe"
+restore = "auto"

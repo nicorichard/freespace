@@ -31,6 +31,50 @@ impl Default for IconsConfig {
     }
 }
 
+/// Settings for the built-in module catalog vendored into the binary.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ModulesConfig {
+    /// Master switch for the vendored catalog. When false, only modules
+    /// installed under `~/.config/freespace/modules/` (and `module_dirs`) load.
+    pub builtin: bool,
+    /// Ids of vendored modules to skip.
+    pub disabled: Vec<String>,
+}
+
+impl Default for ModulesConfig {
+    fn default() -> Self {
+        Self {
+            builtin: true,
+            disabled: Vec::new(),
+        }
+    }
+}
+
+impl ModulesConfig {
+    /// Mark a built-in module id as disabled. Returns false if already disabled.
+    pub fn disable(&mut self, id: &str) -> bool {
+        if self.disabled.iter().any(|d| d == id) {
+            return false;
+        }
+        self.disabled.push(id.to_string());
+        self.disabled.sort();
+        true
+    }
+
+    /// Re-enable a built-in module id. Returns false if it was not disabled.
+    pub fn enable(&mut self, id: &str) -> bool {
+        let len = self.disabled.len();
+        self.disabled.retain(|d| d != id);
+        self.disabled.len() < len
+    }
+
+    /// Whether a vendored module id is disabled by the user.
+    pub fn is_disabled(&self, id: &str) -> bool {
+        self.disabled.iter().any(|d| d == id)
+    }
+}
+
 /// Application-level configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -43,6 +87,7 @@ pub struct AppConfig {
     pub protected_paths: Vec<String>,
     pub enforce_scope: bool,
     pub icons: IconsConfig,
+    pub modules: ModulesConfig,
 }
 
 impl Default for AppConfig {
@@ -55,6 +100,7 @@ impl Default for AppConfig {
             protected_paths: Vec::new(),
             enforce_scope: true,
             icons: IconsConfig::default(),
+            modules: ModulesConfig::default(),
         }
     }
 }

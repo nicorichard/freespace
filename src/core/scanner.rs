@@ -12,7 +12,10 @@ use crate::module::manifest::Module;
 /// Messages sent from the scanner to the TUI event loop.
 pub enum ScanMessage {
     /// A new item was discovered with its calculated size.
-    ItemDiscovered { module_index: usize, item: Item },
+    ItemDiscovered {
+        module_index: usize,
+        item: Box<Item>,
+    },
     /// All items for a module have been discovered and sized.
     ModuleComplete { module_index: usize },
     /// An error occurred while scanning a module.
@@ -181,6 +184,87 @@ pub(crate) fn local_item_name(path: &Path, dir_name: &str) -> String {
         .unwrap_or_else(|| dir_name.to_string())
 }
 
+/// The receiving end of the scan channel went away — the app is shutting down.
+struct SendFailed;
+
+/// Discover items for a handler target and emit them already sized.
+///
+/// Returns how many items were emitted, so the caller can keep its item index
+/// in step with the order the UI receives them.
+fn discover_handler_items(
+    module_index: usize,
+    handler_id: &str,
+    target: &crate::module::manifest::Target,
+    tx: &mpsc::UnboundedSender<ScanMessage>,
+) -> Result<usize, SendFailed> {
+    let Some(handler) = crate::core::handlers::get(handler_id) else {
+        let _ = tx.send(ScanMessage::ModuleError {
+            module_index,
+            error: format!("unknown handler '{handler_id}'"),
+        });
+        return Ok(0);
+    };
+
+    // An unavailable tool is the normal case on most machines, not an error:
+    // no Xcode means no simulators to clean, so the target is simply empty.
+    if !handler.available() {
+        return Ok(0);
+    }
+
+    let discovered = match handler.enumerate() {
+        Ok(items) => items,
+        Err(e) => {
+            let _ = tx.send(ScanMessage::ModuleError {
+                module_index,
+                error: format!("{handler_id}: {e}"),
+            });
+            return Ok(0);
+        }
+    };
+
+    let mut count = 0;
+    for found in discovered {
+        let item = Item {
+            name: found.name,
+            path: crate::core::handlers::identity_path(handler_id, &found.id),
+            size: found.size,
+            item_type: ItemType::Directory,
+            target_description: target.description.clone(),
+            safety_level: crate::core::safety::SafetyLevel::Safe,
+            is_shared: false,
+            restore_kind: target.restore,
+            restore_steps: target.restore_steps.clone(),
+            // A handler item that is still in use costs more to remove than the
+            // target's blanket risk level implies, so raise it.
+            risk_level: if found.in_use {
+                target.risk.max(crate::module::manifest::RiskLevel::High)
+            } else {
+                target.risk
+            },
+            ignore_patterns: Vec::new(),
+            action: crate::core::cleaner::CleanupAction::Handler {
+                handler: handler.id(),
+                id: found.id,
+            },
+            display_path: found.display_path,
+            detail: found.detail,
+        };
+
+        if tx
+            .send(ScanMessage::ItemDiscovered {
+                module_index,
+                item: Box::new(item),
+            })
+            .is_err()
+        {
+            return Err(SendFailed);
+        }
+        count += 1;
+    }
+
+    Ok(count)
+}
+
 /// Scan a single module: discover items (sent with size: None), then calculate
 /// sizes and send `ItemSized` messages. Finally sends `ModuleComplete`.
 fn scan_module(
@@ -195,7 +279,17 @@ fn scan_module(
     let mut paths_to_size: Vec<(usize, PathBuf, Vec<String>)> = Vec::new();
 
     for target in &module.targets {
-        for path_pattern in &target.paths {
+        // Handler targets discover their own items and supply their own sizes,
+        // so they skip the filesystem walk and the phase-2 sizing pass entirely.
+        if let Some(handler_id) = target.handler() {
+            match discover_handler_items(module_index, handler_id, target, tx) {
+                Ok(count) => item_index += count,
+                Err(SendFailed) => return,
+            }
+            continue;
+        }
+
+        for path_pattern in target.paths() {
             if let Some(dir_name) = path_pattern.strip_prefix("**/") {
                 // Local target: recursive search for dir_name under search_dirs
                 let paths = discover_local_dirs(dir_name, search_dirs);
@@ -214,10 +308,16 @@ fn scan_module(
                         restore_steps: target.restore_steps.clone(),
                         risk_level: target.risk,
                         ignore_patterns: target.ignore.clone(),
+                        action: crate::core::cleaner::CleanupAction::Path,
+                        display_path: None,
+                        detail: None,
                     };
 
                     if tx
-                        .send(ScanMessage::ItemDiscovered { module_index, item })
+                        .send(ScanMessage::ItemDiscovered {
+                            module_index,
+                            item: Box::new(item),
+                        })
                         .is_err()
                     {
                         return;
@@ -262,10 +362,16 @@ fn scan_module(
                         restore_steps: target.restore_steps.clone(),
                         risk_level: target.risk,
                         ignore_patterns: target.ignore.clone(),
+                        action: crate::core::cleaner::CleanupAction::Path,
+                        display_path: None,
+                        detail: None,
                     };
 
                     if tx
-                        .send(ScanMessage::ItemDiscovered { module_index, item })
+                        .send(ScanMessage::ItemDiscovered {
+                            module_index,
+                            item: Box::new(item),
+                        })
                         .is_err()
                     {
                         return;
@@ -506,7 +612,10 @@ mod tests {
             icon: None,
             icon_color: None,
             targets: vec![crate::module::manifest::Target {
-                paths: vec![target_dir.to_str().unwrap().to_string()],
+                source: crate::module::manifest::TargetSource::Paths(vec![target_dir
+                    .to_str()
+                    .unwrap()
+                    .to_string()]),
                 description: None,
                 restore: crate::module::manifest::RestoreKind::default(),
                 restore_steps: None,

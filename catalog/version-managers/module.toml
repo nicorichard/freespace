@@ -1,0 +1,36 @@
+id = "version-managers"
+name = "Version Manager Caches"
+version = "1.0.0"
+description = "Download caches from language version managers (nvm, pyenv, rbenv, etc.)."
+author = "freespace"
+platforms = ["macos", "linux"]
+
+[[targets]]
+path = "~/.nvm/.cache"
+description = "nvm Node.js download cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.pyenv/cache"
+description = "pyenv Python download cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.rbenv/cache"
+description = "rbenv Ruby download cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.sdkman/archives"
+description = "SDKMAN download archives"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.asdf/downloads"
+description = "asdf download cache"
+risk = "safe"
+restore = "auto"

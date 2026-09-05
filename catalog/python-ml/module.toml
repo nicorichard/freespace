@@ -1,0 +1,98 @@
+id = "python-ml"
+name = "Python & ML Caches"
+version = "1.0.0"
+description = "Python package caches, ML model caches, and project-local build artifacts."
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+icon_color = "#3776AB"
+
+[[targets]]
+path = "~/.cache/pip"
+description = "pip download cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.conda/pkgs"
+description = "Conda package tarballs"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.cache/huggingface"
+description = "HuggingFace model cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.cache/torch"
+description = "PyTorch hub model cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/.keras/models"
+description = "Keras pre-trained model cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "~/Library/Jupyter/runtime"
+description = "Jupyter runtime files"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/__pycache__"
+description = "Python bytecode cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.mypy_cache"
+description = "mypy type-checker cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.ruff_cache"
+description = "Ruff linter cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.pytest_cache"
+description = "pytest cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.tox"
+description = "tox test virtualenvs"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.nox"
+description = "nox session virtualenvs"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.eggs"
+description = "Setuptools egg build cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.pytype"
+description = "Pytype type checker cache"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.pyre"
+description = "Pyre type checker cache"
+risk = "safe"
+restore = "auto"

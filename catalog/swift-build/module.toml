@@ -1,0 +1,20 @@
+id = "swift-build"
+name = "Swift Build Artifacts"
+version = "1.0.0"
+description = "Project-local Swift build artifacts"
+author = "freespace"
+platforms = ["macos", "linux"]
+icon = ""
+icon_color = "#F05138"
+
+[[targets]]
+path = "**/.build"
+description = "Swift build artifacts directory"
+risk = "safe"
+restore = "auto"
+
+[[targets]]
+path = "**/.swiftpm"
+description = "Per-project Swift PM workspace state"
+risk = "safe"
+restore = "auto"
