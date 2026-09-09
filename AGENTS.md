@@ -54,6 +54,7 @@ src/
       module_list.rs   Main view: list of modules with sizes.
       module_detail.rs Detail view: items within a module, drill-in support.
       cleanup_confirm.rs Confirmation dialog before trash/delete.
+      cleanup_results.rs Post-cleanup failures with their error text.
       help.rs          Help overlay.
     widgets/
       size_fmt.rs      Human-readable size formatting.
@@ -71,7 +72,8 @@ Event-driven TUI with background async scanning:
    sends `ScanMessage` variants (`ItemDiscovered`, `ModuleComplete`, `ModuleError`,
    `DrillItemSized`).
 4. View enum dispatches rendering: `ModuleList` -> `ModuleDetail(index)` ->
-   `CleanupConfirm`, with `Help` as an overlay.
+   `CleanupConfirm` -> `CleanupProgress` -> `CleanupResults` (only when
+   something failed), with `Help` as an overlay.
 
 ## Module system
 

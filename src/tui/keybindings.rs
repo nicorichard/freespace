@@ -186,6 +186,12 @@ pub const CLEANUP_CONFIRM: &[HotkeyDef] = &[
 // Install select (standalone mini-TUI — legacy)
 // ---------------------------------------------------------------------------
 
+pub const CLEANUP_RESULTS: &[HotkeyDef] = &[
+    hk("\u{2191}\u{2193}", "navigate", "Move between failures"),
+    hk("esc", "dismiss", "Return to the previous view"),
+    hk("?", "help", "Toggle this help"),
+];
+
 pub const INSTALL_SELECT: &[HotkeyDef] = &[
     hk("␣", "toggle", "Toggle module"),
     hk("a", "all", "Select all"),

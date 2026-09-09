@@ -114,7 +114,7 @@ pub fn handle_key(app: &mut App, key: KeyCode, module_idx: usize) {
         }
         // Built-in modules have nothing on disk to remove; `r` disables them
         // in config instead, which is the reversible equivalent.
-        KeyCode::Char('r') | KeyCode::Char('D') => {
+        KeyCode::Char('r') => {
             app.info_confirm_remove = true;
         }
         KeyCode::Char('u') => {

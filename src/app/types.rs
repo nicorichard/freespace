@@ -24,6 +24,24 @@ pub enum View {
     FlatView,
     FileBrowser,
     ModuleInstall,
+    CleanupResults,
+}
+
+/// One item that could not be removed, kept for the results view.
+pub struct CleanupFailure {
+    /// What the user selected, named the way it was shown to them.
+    pub label: String,
+    /// Why it failed — a safety rule, an OS error, or a handler's stderr.
+    pub reason: String,
+}
+
+/// Outcome of the last cleanup, retained so failures can be read.
+///
+/// Failures used to be summarised in a ~3s flash, which is not long enough to
+/// read a command's error output.
+pub struct CleanupOutcome {
+    pub succeeded: usize,
+    pub failures: Vec<CleanupFailure>,
 }
 
 /// State for a single loaded module including its discovered items.

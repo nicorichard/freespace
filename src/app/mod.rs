@@ -7,9 +7,9 @@ mod types;
 pub use drill::{DrillLevel, DrillState};
 pub use filter::{matches_filter, matches_structured_filter};
 pub use types::{
-    CleanupProgressState, FlashLevel, InstallCandidate, InstallMessage, InstallPhase, Item,
-    ItemType, ModuleInstallState, ModuleState, ModuleStatus, ModuleUpdateStatus, ScanStatus,
-    SiblingUpdatePrompt, View,
+    CleanupFailure, CleanupOutcome, CleanupProgressState, FlashLevel, InstallCandidate,
+    InstallMessage, InstallPhase, Item, ItemType, ModuleInstallState, ModuleState, ModuleStatus,
+    ModuleUpdateStatus, ScanStatus, SiblingUpdatePrompt, View,
 };
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -152,6 +152,12 @@ pub struct App {
     pub stats: stats::Stats,
     /// Metadata snapshot for in-flight cleanup: path -> (module_id, size).
     cleanup_item_meta: HashMap<PathBuf, (String, u64)>,
+    /// Display labels for the items in the running cleanup, captured up front
+    /// because a handler item's path is a synthetic identity and its module
+    /// entry is gone by the time results are shown.
+    cleanup_labels: HashMap<PathBuf, String>,
+    /// Outcome of the last cleanup, when it had failures worth reading.
+    pub cleanup_outcome: Option<CleanupOutcome>,
 }
 
 /// Spawn background update checks for all git-sourced modules.
@@ -398,6 +404,8 @@ impl App {
             install_mode: false,
             stats: stats::Stats::load(),
             cleanup_item_meta: HashMap::new(),
+            cleanup_labels: HashMap::new(),
+            cleanup_outcome: None,
         }
     }
 
@@ -465,6 +473,8 @@ impl App {
             install_mode: true,
             stats: stats::Stats::load(),
             cleanup_item_meta: HashMap::new(),
+            cleanup_labels: HashMap::new(),
+            cleanup_outcome: None,
         };
         app.start_module_install(source_str, modules_dir, link);
         app
@@ -1308,6 +1318,7 @@ impl App {
             View::ModuleDetail(_) => views::module_detail::handle_key(self, key),
             View::CleanupConfirm => views::cleanup_confirm::handle_key(self, key),
             View::CleanupProgress => views::cleanup_progress::handle_key(self, key),
+            View::CleanupResults => views::cleanup_results::handle_key(self, key),
             View::Help => views::help::handle_key(self, key),
             View::Info(idx) => {
                 let idx = *idx;
@@ -1551,6 +1562,19 @@ impl App {
         self.start_cleanup(false);
     }
 
+    /// How to name an item in results: its display name where we know it,
+    /// falling back to the path the user was shown.
+    fn item_label(&self, path: &Path) -> String {
+        for ms in &self.modules {
+            for item in &ms.items {
+                if item.path == *path {
+                    return item.name.clone();
+                }
+            }
+        }
+        path.display().to_string()
+    }
+
     /// Spawn cleanup as a background blocking task, transitioning to CleanupProgress view.
     pub(crate) fn start_cleanup(&mut self, permanent: bool) {
         let deduped = crate::tui::views::cleanup_confirm::dedup_paths(&self.confirm_checked);
@@ -1571,6 +1595,11 @@ impl App {
         if total == 0 {
             return;
         }
+
+        self.cleanup_labels = cleanup_items
+            .iter()
+            .map(|item| (item.path.clone(), self.item_label(&item.path)))
+            .collect();
 
         // Snapshot item metadata so we can attribute freed bytes after cleanup.
         self.cleanup_item_meta.clear();
@@ -1977,26 +2006,39 @@ impl App {
             };
         }
 
-        // Flash message for failures
-        if failed_count > 0 && failed_count == total_count {
+        // Retain failures so their detail can be read. A handler failure carries
+        // its command's stderr, which a status-bar flash cannot show.
+        if failed_count > 0 {
+            self.cleanup_outcome = Some(CleanupOutcome {
+                succeeded: succeeded.len(),
+                failures: result
+                    .failed
+                    .into_iter()
+                    .map(|(path, reason)| CleanupFailure {
+                        label: self
+                            .cleanup_labels
+                            .get(&path)
+                            .cloned()
+                            .unwrap_or_else(|| path.display().to_string()),
+                        reason,
+                    })
+                    .collect(),
+            });
             self.set_flash(
                 format!(
-                    "Blocked: {} item{} denied by safety rules",
-                    failed_count,
-                    if failed_count == 1 { "" } else { "s" }
+                    "{}/{} cleaned \u{2014} {} failed",
+                    succeeded.len(),
+                    total_count,
+                    failed_count
                 ),
-                FlashLevel::Error,
-            );
-        } else if failed_count > 0 {
-            let ok_count = succeeded.len();
-            self.set_flash(
-                format!(
-                    "{}/{} cleaned; {} blocked by safety rules",
-                    ok_count, total_count, failed_count
-                ),
-                FlashLevel::Warning,
+                if failed_count == total_count {
+                    FlashLevel::Error
+                } else {
+                    FlashLevel::Warning
+                },
             );
         }
+        self.cleanup_labels.clear();
 
         self.recalculate_dedup();
         self.drill.clear();
@@ -2010,6 +2052,18 @@ impl App {
         self.cleanup_cancel = None;
         self.cleanup_progress = None;
         self.confirm_checked.clear();
+        // Failures land on the results view; a clean run goes straight back.
+        if self.cleanup_outcome.is_some() {
+            self.set_view(View::CleanupResults);
+        } else {
+            self.set_view(self.previous_view);
+        }
+        self.selected_index = 0;
+    }
+
+    /// Dismiss the results view and return to where cleanup was started from.
+    pub(crate) fn dismiss_cleanup_results(&mut self) {
+        self.cleanup_outcome = None;
         self.set_view(self.previous_view);
         self.selected_index = 0;
     }
@@ -2067,6 +2121,7 @@ impl App {
             View::ModuleDetail(idx) => views::module_detail::render(self, frame, idx),
             View::CleanupConfirm => views::cleanup_confirm::render(self, frame),
             View::CleanupProgress => views::cleanup_progress::render(self, frame),
+            View::CleanupResults => views::cleanup_results::render(self, frame),
             View::Help => views::help::render(self, frame),
             View::Info(idx) => views::info::render(self, frame, idx),
             View::FlatView => views::flat_view::render(self, frame),
@@ -2148,6 +2203,8 @@ impl App {
             install_mode: false,
             stats: stats::Stats::load(),
             cleanup_item_meta: HashMap::new(),
+            cleanup_labels: HashMap::new(),
+            cleanup_outcome: None,
         }
     }
 }

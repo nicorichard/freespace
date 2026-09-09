@@ -287,3 +287,36 @@ async fn xcode_simulators_module_scans_end_to_end() {
         eprintln!("    -> {command}");
     }
 }
+
+/// A handler failure must reach the user with its command's error text intact,
+/// rather than being flattened into a generic "blocked by safety rules" flash.
+#[test]
+fn handler_failure_reason_reaches_the_result() {
+    use freespace::core::cleaner::{delete_items, CleanupAction, CleanupItem, CleanupOptions};
+    use std::sync::atomic::AtomicBool;
+
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let cancel = AtomicBool::new(false);
+    let opts = CleanupOptions {
+        audit_log: false,
+        ..Default::default()
+    };
+
+    // A handler id that is not registered fails without touching the system.
+    let items = vec![CleanupItem {
+        action: CleanupAction::Handler {
+            handler: "not.a.real.handler",
+            id: "XYZ".to_string(),
+        },
+        ..CleanupItem::from(std::path::PathBuf::from("freespace-handler/x/XYZ"))
+    }];
+
+    let result = delete_items(&items, &opts, &cancel, &tx);
+    assert!(result.succeeded.is_empty());
+    assert_eq!(result.failed.len(), 1);
+    assert!(
+        result.failed[0].1.contains("not.a.real.handler"),
+        "reason should name the failing handler, got: {}",
+        result.failed[0].1
+    );
+}

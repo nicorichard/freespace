@@ -1,5 +1,6 @@
 pub mod cleanup_confirm;
 pub mod cleanup_progress;
+pub mod cleanup_results;
 pub mod file_browser;
 pub mod filter_menu;
 pub mod flat_view;
