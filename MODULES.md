@@ -1,6 +1,6 @@
 # Writing Freespace Modules
 
-Freespace ships with a built-in catalog of modules, so it works out of the box with nothing installed. Modules are the extension point on top of that: a way to add paths freespace doesn't already know about, or to override a built-in.
+This document is for the optional case: writing your own module. Freespace ships a built-in catalog and works out of the box with nothing installed — a module is how you add paths the catalog doesn't cover, or override a built-in.
 
 Modules are declarative TOML files. A module is a directory containing a `module.toml` manifest that declares either **path patterns** to scan, or the name of a **built-in handler**. A manifest cannot specify a command — it can only select from the fixed set of handlers compiled into freespace (see [Handlers](#handlers)), so installing a module never introduces new code.
 
@@ -55,6 +55,7 @@ description = "What lives here"
 3. Drop the directory into `~/.config/freespace/modules/`:
 
 ```
+mkdir -p ~/.config/freespace/modules
 cp -r my-module ~/.config/freespace/modules/
 ```
 
@@ -347,9 +348,10 @@ freespace module install github:owner/repo@main#rust-caches
 ### Managing installed modules
 
 ```
-freespace module list       # list installed modules
+freespace module list       # every module, built-in and installed
 freespace module inspect X  # show manifest and source info
 freespace module remove X   # uninstall a module
+freespace module prune      # reconcile installed modules with the catalog
 ```
 
 ## Tips
