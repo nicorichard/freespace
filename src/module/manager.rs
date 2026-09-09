@@ -34,8 +34,8 @@ pub struct LoadResult {
 
 /// Load modules from the built-in catalog and all configured directories.
 ///
-/// Sources, in order: the built-in catalog, the default modules directory
-/// (created if missing), then each extra directory from config and CLI flags.
+/// Sources, in order: the built-in catalog, the default modules directory,
+/// then each extra directory from config and CLI flags.
 ///
 /// A user module whose id matches a built-in **replaces** the built-in, so a
 /// catalog entry can be overridden locally. The exception is an installed copy
@@ -63,17 +63,9 @@ pub fn load_all_modules(
     // 2. User modules: default directory, then extra directories
     let mut user: Vec<(Module, PathBuf)> = Vec::new();
 
+    // An absent default directory is the normal case — the catalog is what
+    // most runs load — so it is skipped in silence, like a missing config file.
     if let Some(dir) = default_dir {
-        if !dir.exists() {
-            if let Err(e) = fs::create_dir_all(&dir) {
-                all_warnings.push(format!(
-                    "Could not create default modules directory {}: {}",
-                    dir.display(),
-                    e
-                ));
-            }
-        }
-
         if dir.is_dir() {
             let (modules, warnings) = load_builtin_modules(&dir);
             user.extend(modules);
@@ -536,6 +528,20 @@ path = "~/test"
         let tmp = tempfile::TempDir::new().unwrap();
         let report = prune_modules(tmp.path()).unwrap();
         assert_eq!(report, PruneReport::default());
+    }
+
+    /// Most runs have nothing installed. An absent modules directory loads the
+    /// catalog quietly and leaves the filesystem alone.
+    #[test]
+    fn absent_default_dir_is_neither_created_nor_warned_about() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let missing = tmp.path().join("modules");
+
+        let loaded = load_all_modules(Some(missing.clone()), &[], &catalog_enabled());
+
+        assert!(!missing.exists(), "startup must not create the directory");
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        assert!(!loaded.modules.is_empty());
     }
 
     #[test]
