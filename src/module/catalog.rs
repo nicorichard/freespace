@@ -55,6 +55,17 @@ pub fn catalog_ids() -> Vec<String> {
         .collect()
 }
 
+/// Whether the catalog ships a module with this id, on any platform.
+///
+/// Pruning asks this rather than [`catalog_ids`]: a copy of a catalog module
+/// installed on a machine the module does not target is still a copy.
+pub fn ships_id(id: &str) -> bool {
+    CATALOG
+        .iter()
+        .filter_map(|(_, contents)| Module::parse(contents).ok())
+        .any(|m| m.id == id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,6 +92,17 @@ mod tests {
 
     /// Module ids must be unique, otherwise user-override precedence and the
     /// disabled list become ambiguous.
+    /// Every catalog entry is recognised as shipped, whatever platform it
+    /// targets, so pruning a copy of one is not platform-dependent.
+    #[test]
+    fn ships_id_ignores_platform() {
+        for (_, contents) in CATALOG {
+            let module = Module::parse(contents).expect("catalog manifest parses");
+            assert!(ships_id(&module.id), "catalog ships '{}'", module.id);
+        }
+        assert!(!ships_id("not-a-real-module"));
+    }
+
     #[test]
     fn catalog_ids_are_unique() {
         let mut seen = std::collections::HashSet::new();

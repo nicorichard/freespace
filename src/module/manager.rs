@@ -216,7 +216,6 @@ pub struct PruneReport {
 /// updates. Modules from any other source, and those with no `source.toml`,
 /// are untouched.
 pub fn prune_modules(modules_dir: &Path) -> anyhow::Result<PruneReport> {
-    let builtin_ids = catalog::catalog_ids();
     let mut report = PruneReport::default();
 
     let Ok(entries) = fs::read_dir(modules_dir) else {
@@ -241,7 +240,7 @@ pub fn prune_modules(modules_dir: &Path) -> anyhow::Result<PruneReport> {
             continue;
         };
         let id = parsed.id;
-        if builtin_ids.iter().any(|b| b == &id) {
+        if catalog::ships_id(&id) {
             fs::remove_dir_all(&dir)?;
             report.removed.push(id);
         } else {
