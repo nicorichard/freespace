@@ -2284,6 +2284,26 @@ mod tests {
         }
     }
 
+    /// A module with no `source.toml` has no remote to ask, so the update
+    /// check resolves locally as skipped and reaches no network.
+    #[test]
+    fn update_check_skips_a_module_with_no_source() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let module_dir = tmp.path().join("my-fork");
+        std::fs::create_dir_all(&module_dir).unwrap();
+        std::fs::write(module_dir.join("module.toml"), "").unwrap();
+
+        let mut ms = make_module("my-fork", vec![]);
+        ms.manifest_path = Some(module_dir.join("module.toml"));
+
+        let mut rx = spawn_update_checks(&[ms]).expect("a status is reported");
+        assert!(matches!(
+            rx.try_recv(),
+            Ok((0, ModuleUpdateStatus::Skipped))
+        ));
+        assert!(rx.try_recv().is_err(), "no further results are pending");
+    }
+
     fn make_test_app() -> App {
         let mut m1 = make_module(
             "docker",

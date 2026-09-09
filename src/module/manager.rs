@@ -205,6 +205,64 @@ fn load_module(path: &Path) -> anyhow::Result<Module> {
     Module::parse(&content)
 }
 
+/// What pruning did to an installed modules directory.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PruneReport {
+    /// Ids of module directories deleted because a built-in covers them.
+    pub removed: Vec<String>,
+    /// Ids of modules kept while their `source.toml` was dropped, leaving a
+    /// plain local module.
+    pub detached: Vec<String>,
+}
+
+/// Reconcile an installed modules directory against the built-in catalog.
+///
+/// A module installed from [`crate::config::CATALOG_SOURCE_REPO`] is either
+/// covered by a built-in — in which case its directory goes — or it is content
+/// the catalog does not ship, in which case only its `source.toml` goes. That
+/// leaves the module in place as a local one, with no remote to check for
+/// updates. Modules from any other source, and those with no `source.toml`,
+/// are untouched.
+pub fn prune_modules(modules_dir: &Path) -> anyhow::Result<PruneReport> {
+    let builtin_ids = catalog::catalog_ids();
+    let mut report = PruneReport::default();
+
+    let Ok(entries) = fs::read_dir(modules_dir) else {
+        return Ok(report);
+    };
+
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Some(source) = crate::module::installer::read_source_info(&dir) else {
+            continue;
+        };
+        if source.repository != crate::config::CATALOG_SOURCE_REPO {
+            continue;
+        }
+        let Ok(manifest) = fs::read_to_string(dir.join("module.toml")) else {
+            continue;
+        };
+        let Ok(parsed) = Module::parse(&manifest) else {
+            continue;
+        };
+        let id = parsed.id;
+        if builtin_ids.iter().any(|b| b == &id) {
+            fs::remove_dir_all(&dir)?;
+            report.removed.push(id);
+        } else {
+            fs::remove_file(dir.join("source.toml"))?;
+            report.detached.push(id);
+        }
+    }
+
+    report.removed.sort();
+    report.detached.sort();
+    Ok(report)
+}
+
 /// Return the current platform string matching module manifest conventions.
 pub(crate) fn current_platform() -> String {
     match env::consts::OS {
@@ -394,6 +452,90 @@ path = "~/test"
             .collect();
         assert_eq!(matching.len(), 1);
         assert_eq!(matching[0].origin, ModuleOrigin::User);
+    }
+
+    /// Write an installed module claiming an unrelated upstream repo.
+    fn write_third_party_module(dir: &Path, id: &str) {
+        write_catalog_duplicate(dir, id);
+        fs::write(
+            dir.join(id).join("source.toml"),
+            "[source]\nrepository = \"https://github.com/someone/other-modules\"\ncommit = \"abc\"\ninstalled_at = 0\n",
+        )
+        .unwrap();
+    }
+
+    /// Pruning touches exactly the modules that came from the catalog's own
+    /// source repo, and nothing else.
+    #[test]
+    fn prune_classifies_every_kind_of_installed_module() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (builtins, _) = crate::module::catalog::load_catalog(&[]);
+        let builtin_id = builtins[0].id.clone();
+
+        write_catalog_duplicate(tmp.path(), &builtin_id);
+        write_catalog_duplicate(tmp.path(), "my-fork");
+        write_module_toml(tmp.path(), "hand-written", &[&current_platform()]);
+        write_third_party_module(tmp.path(), "third-party");
+
+        let local_before = fs::read(tmp.path().join("hand-written/module.toml")).unwrap();
+        let third_manifest_before = fs::read(tmp.path().join("third-party/module.toml")).unwrap();
+        let third_source_before = fs::read(tmp.path().join("third-party/source.toml")).unwrap();
+        let fork_manifest_before = fs::read(tmp.path().join("my-fork/module.toml")).unwrap();
+
+        let report = prune_modules(tmp.path()).unwrap();
+
+        assert_eq!(report.removed, vec![builtin_id.clone()]);
+        assert_eq!(report.detached, vec!["my-fork".to_string()]);
+
+        // The catalog duplicate is gone entirely.
+        assert!(!tmp.path().join(&builtin_id).exists());
+
+        // The fork keeps its manifest and loses only its source.
+        assert!(!tmp.path().join("my-fork/source.toml").exists());
+        assert_eq!(
+            fs::read(tmp.path().join("my-fork/module.toml")).unwrap(),
+            fork_manifest_before
+        );
+
+        // Everything else is byte-identical.
+        assert_eq!(
+            fs::read(tmp.path().join("hand-written/module.toml")).unwrap(),
+            local_before
+        );
+        assert!(!tmp.path().join("hand-written/source.toml").exists());
+        assert_eq!(
+            fs::read(tmp.path().join("third-party/module.toml")).unwrap(),
+            third_manifest_before
+        );
+        assert_eq!(
+            fs::read(tmp.path().join("third-party/source.toml")).unwrap(),
+            third_source_before
+        );
+    }
+
+    /// A detached module is a plain local one: loading it works and it has no
+    /// source to check for updates.
+    #[test]
+    fn detached_module_still_loads_and_has_no_source() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        write_catalog_duplicate(tmp.path(), "my-fork");
+
+        prune_modules(tmp.path()).unwrap();
+
+        let module_dir = tmp.path().join("my-fork");
+        assert!(crate::module::installer::read_source_info(&module_dir).is_none());
+        assert!(crate::module::installer::read_update_check_info(&module_dir).is_none());
+
+        let (modules, warnings) = load_builtin_modules(tmp.path());
+        assert!(warnings.is_empty());
+        assert!(modules.iter().any(|(m, _)| m.id == "my-fork"));
+    }
+
+    #[test]
+    fn prune_reports_nothing_for_an_empty_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let report = prune_modules(tmp.path()).unwrap();
+        assert_eq!(report, PruneReport::default());
     }
 
     #[test]

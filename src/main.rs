@@ -106,7 +106,7 @@ enum ModuleCommand {
         /// ID of the built-in module to re-enable
         id: String,
     },
-    /// Remove installed modules that duplicate a built-in
+    /// Reconcile installed modules with the built-in catalog
     Prune,
 }
 
@@ -255,87 +255,100 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// List all installed modules with source information.
+/// List every module available, built-in and installed alike.
 fn cmd_list(modules_dir: &std::path::Path) {
     let cfg = config::AppConfig::load().unwrap_or_default();
 
-    let mut found = false;
-    let header = |found: &mut bool| {
-        if !*found {
-            println!("{:<24} {:<22} {:<10} SOURCE", "ID", "NAME", "VERSION");
-            *found = true;
-        }
+    /// One installed module directory, ready to print.
+    struct Installed {
+        id: String,
+        name: String,
+        version: String,
+        source: String,
+        /// A copy of a module the catalog also ships, which the app ignores in
+        /// favour of the built-in.
+        duplicate: bool,
+    }
+
+    let builtins = if cfg.modules.builtin {
+        module::catalog::load_catalog(&[]).0
+    } else {
+        Vec::new()
     };
+
+    let mut installed: Vec<Installed> = Vec::new();
+    if let Ok(entries) = fs::read_dir(modules_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let Ok(content) = fs::read_to_string(path.join("module.toml")) else {
+                continue;
+            };
+            let Ok(module) = module::manifest::Module::parse(&content) else {
+                continue;
+            };
+
+            let source = module::installer::read_source_info(&path);
+            let from_catalog_repo = source
+                .as_ref()
+                .is_some_and(|s| s.repository == config::CATALOG_SOURCE_REPO);
+            let shadows_builtin = builtins.iter().any(|b| b.id == module.id);
+
+            installed.push(Installed {
+                source: match source {
+                    Some(s) => s.repository,
+                    None => "local".to_string(),
+                },
+                duplicate: from_catalog_repo && shadows_builtin,
+                id: module.id,
+                name: module.name,
+                version: module.version,
+            });
+        }
+    }
+
+    if builtins.is_empty() && installed.is_empty() {
+        println!("No modules available.");
+        return;
+    }
+
+    println!("{:<24} {:<22} {:<10} SOURCE", "ID", "NAME", "VERSION");
 
     // Built-in modules first — they are what the user gets without installing
     // anything, so they belong at the top of the list.
-    if cfg.modules.builtin {
-        let (builtins, _) = module::catalog::load_catalog(&[]);
-        for module in builtins {
-            header(&mut found);
-            let source = if cfg.modules.is_disabled(&module.id) {
-                "built-in (disabled)"
-            } else {
-                "built-in"
-            };
-            println!(
-                "{:<24} {:<22} {:<10} {}",
-                module.id, module.name, module.version, source
-            );
-        }
-    }
-
-    let entries = match fs::read_dir(modules_dir) {
-        Ok(e) => e,
-        Err(_) => {
-            if !found {
-                println!("No modules available.");
-            }
-            return;
-        }
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-
-        let manifest_path = path.join("module.toml");
-        if !manifest_path.exists() {
-            continue;
-        }
-
-        let content = match fs::read_to_string(&manifest_path) {
-            Ok(c) => c,
-            Err(_) => continue,
+    for module in &builtins {
+        // An installed module of the same id that is not a catalog copy is a
+        // deliberate override, and it is the one the app loads.
+        let overridden = installed.iter().any(|i| i.id == module.id && !i.duplicate);
+        let source = if cfg.modules.is_disabled(&module.id) {
+            "built-in (disabled)"
+        } else if overridden {
+            "built-in (overridden by installed)"
+        } else {
+            "built-in"
         };
-        let module = match module::manifest::Module::parse(&content) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-
-        let source = module::installer::read_source_info(&path);
-
-        header(&mut found);
-
-        let source_str = match source {
-            Some(s) => s.repository,
-            None => "local".to_string(),
-        };
-
         println!(
             "{:<24} {:<22} {:<10} {}",
-            module.id, module.name, module.version, source_str
+            module.id, module.name, module.version, source
         );
     }
 
-    if !found {
-        println!("No modules available.");
+    for entry in &installed {
+        let source = if entry.duplicate {
+            "duplicate of built-in (ignored)".to_string()
+        } else {
+            entry.source.clone()
+        };
+        println!(
+            "{:<24} {:<22} {:<10} {}",
+            entry.id, entry.name, entry.version, source
+        );
     }
 }
 
-/// Remove an installed module by id.
 /// Enable or disable a built-in module by editing config.toml.
 fn cmd_set_builtin_enabled(id: &str, enable: bool) -> anyhow::Result<()> {
     let available = module::catalog::catalog_ids();
@@ -371,58 +384,43 @@ fn cmd_set_builtin_enabled(id: &str, enable: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Remove installed modules that duplicate one the catalog already ships.
+/// Reconcile installed modules with the built-in catalog.
 fn cmd_prune(modules_dir: &std::path::Path) -> anyhow::Result<()> {
-    let builtin_ids = module::catalog::catalog_ids();
-    let mut removed = Vec::new();
-
-    let entries = match fs::read_dir(modules_dir) {
-        Ok(entries) => entries,
-        Err(_) => {
-            println!("No installed modules.");
-            return Ok(());
-        }
-    };
-
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        if !dir.is_dir() {
-            continue;
-        }
-        let Some(source) = module::installer::read_source_info(&dir) else {
-            continue;
-        };
-        if source.repository != config::CATALOG_SOURCE_REPO {
-            continue;
-        }
-        // Only prune when a built-in genuinely covers it, so a module the
-        // catalog does not ship is left alone rather than silently lost.
-        let Ok(manifest) = fs::read_to_string(dir.join("module.toml")) else {
-            continue;
-        };
-        let Ok(parsed) = module::manifest::Module::parse(&manifest) else {
-            continue;
-        };
-        let id = parsed.id;
-        if !builtin_ids.iter().any(|b| b == &id) {
-            continue;
-        }
-        fs::remove_dir_all(&dir)?;
-        removed.push(id);
+    if !modules_dir.is_dir() {
+        println!("No installed modules.");
+        return Ok(());
     }
 
-    if removed.is_empty() {
-        println!("Nothing to prune — no installed modules duplicate a built-in.");
-    } else {
-        removed.sort();
-        println!("Removed {} duplicate module(s):", removed.len());
-        for id in &removed {
-            println!("  {}", id);
-        }
+    let report = module::manager::prune_modules(modules_dir)?;
+
+    if report.removed.is_empty() && report.detached.is_empty() {
+        println!("Nothing to prune — every installed module stands on its own.");
+        return Ok(());
     }
+
+    match report.removed.len() {
+        0 => {}
+        1 => println!("Removed 1 module that duplicates a built-in."),
+        n => println!("Removed {} modules that duplicate a built-in.", n),
+    }
+
+    let detached = report.detached.join(", ");
+    match report.detached.len() {
+        0 => {}
+        1 => println!(
+            "Detached 1 module from its source; it is now local: {}",
+            detached
+        ),
+        n => println!(
+            "Detached {} modules from their sources; they are now local: {}",
+            n, detached
+        ),
+    }
+
     Ok(())
 }
 
+/// Remove an installed module by id.
 fn cmd_remove(modules_dir: &std::path::Path, id: &str) -> anyhow::Result<()> {
     let module_dir = find_module_dir(modules_dir, id)?;
     fs::remove_dir_all(&module_dir)?;
