@@ -80,7 +80,7 @@ Every module must have a `module.toml` at the root of its directory. All top-lev
 | `targets.handler` | String | * | Name of a built-in handler. Mutually exclusive with `path`/`paths` |
 | `targets.description` | String | No | What this specific target contains |
 | `targets.restore` | String | No | How contents are restored: `"auto"` (default) or `"manual"` |
-| `targets.restore_steps` | String | No | Human-readable recovery instructions (e.g. `"Run npm install"`) |
+| `targets.restore_steps` | String or array | No | Human-readable recovery instructions (e.g. `"Run npm install"`); an array becomes one line per entry |
 | `targets.risk` | String | No | Impact of deletion: `"safe"` (default), `"low"`, `"medium"`, `"high"` |
 | `targets.ignore` | String or array | No | Glob patterns for files/directories to preserve within this target |
 
@@ -166,7 +166,7 @@ risk = "safe"
 | `auto` (default) | Rebuilt automatically by the system (e.g. caches, derived data) |
 | `manual` | Requires a user action to restore (e.g. `npm install`, `pod install`) |
 
-**`restore_steps`** — Human-readable instructions shown in the TUI when `restore = "manual"`. Tells the user exactly what to run to get things working again.
+**`restore_steps`** — Human-readable instructions shown in the TUI when `restore = "manual"`. Tells the user exactly what to run to get things working again. Give one string, or an array of them for instructions that need more than a sentence.
 
 **`risk`** — Potential impact of deletion:
 

@@ -147,9 +147,11 @@ Any large list **must** support `/` search:
 The UI has two categories of view:
 
 - **Screens** are full views the user spends time in (ModuleList, ModuleDetail,
-  FlatView, FileBrowser, CleanupConfirm, ModuleInstall). They have the full
-  header/body/status-bar layout and **must** support `[?] help`, movement keys,
-  `/` search, multi-select, and mouse scroll.
+  FlatView, FileBrowser, CleanupConfirm, CleanupResults, ModuleInstall). They
+  have the full header/body/status-bar layout and **must** support `[?] help`,
+  movement keys, and mouse scroll, plus `/` search and multi-select wherever
+  there is something to search or select. A read-only screen such as
+  CleanupResults carries neither.
 - **Dialogs** are small, transient call-to-action surfaces (Help overlay, Info
   overlay, FilterMenu, CleanupProgress, inline confirmations like `[y]es [n]o`).
   They do **not** need `[?] help`, search, or multi-select — they should be
