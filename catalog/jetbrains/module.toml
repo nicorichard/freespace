@@ -1,37 +1,48 @@
 id = "jetbrains"
-name = "JetBrains IDE Caches"
-version = "1.0.0"
-description = "JetBrains IDE logs, caches, indexes, and temp files."
+name = "JetBrains IDEs"
+version = "1.1.0"
+description = "Caches, logs, and settings of JetBrains IDEs and Android Studio, one folder per IDE version. Each major update starts a fresh set and leaves the previous version's folders behind."
 author = "freespace"
 platforms = ["macos", "linux"]
 icon = ""
 
+# Version folders share their parent with non-version siblings (Toolbox,
+# consentOptions, Chrome under Google/), so every pattern pins the name to a
+# version shape or product prefix rather than using a bare `*`.
+
 [[targets]]
-path = "~/Library/Logs/JetBrains"
-description = "JetBrains IDE logs (macOS)"
+paths = [
+    "~/Library/Caches/JetBrains/*20[0-9][0-9].[0-9]*",
+    "~/Library/Caches/Google/AndroidStudio*",
+    "~/.cache/JetBrains/*20[0-9][0-9].[0-9]*",
+    "~/.cache/Google/AndroidStudio*",
+]
+description = "Caches and indexes per IDE version (the version you run reindexes and loses Local History)"
+risk = "low"
+restore = "auto"
+
+[[targets]]
+paths = [
+    "~/Library/Logs/JetBrains/*20[0-9][0-9].[0-9]*",
+    "~/Library/Logs/Google/AndroidStudio*",
+]
+description = "Logs per IDE version"
 risk = "safe"
 restore = "auto"
 
 [[targets]]
-path = "~/.local/share/JetBrains/*/log"
-description = "JetBrains IDE logs (Linux)"
-risk = "safe"
-restore = "auto"
-
-[[targets]]
-path = "~/Library/Application Support/JetBrains/*/caches"
-description = "JetBrains per-product caches"
-risk = "safe"
-restore = "auto"
-
-[[targets]]
-path = "~/Library/Application Support/JetBrains/*/index"
-description = "JetBrains code index"
-risk = "safe"
-restore = "auto"
-
-[[targets]]
-path = "~/Library/Application Support/JetBrains/*/tmp"
-description = "JetBrains temp files"
-risk = "safe"
-restore = "auto"
+paths = [
+    "~/Library/Application Support/JetBrains/*20[0-9][0-9].[0-9]*",
+    "~/Library/Application Support/Google/AndroidStudio*",
+    "~/.config/JetBrains/*20[0-9][0-9].[0-9]*",
+    "~/.config/Google/AndroidStudio*",
+    "~/.local/share/JetBrains/*20[0-9][0-9].[0-9]*",
+    "~/.local/share/Google/AndroidStudio*",
+]
+description = "Settings and plugins per IDE version"
+risk = "medium"
+restore = "manual"
+restore_steps = [
+    "A newer IDE version imports these on first launch, so an older version's folder is only needed to run that version again.",
+    "Removing the folder of the version you run resets its settings and plugins.",
+]

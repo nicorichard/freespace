@@ -117,6 +117,43 @@ mod tests {
         }
     }
 
+    /// JetBrains and Google directories hold non-IDE siblings — Toolbox's
+    /// installed apps, Chrome — next to the per-version folders, so each
+    /// pattern must pick out IDE versions and nothing else.
+    #[test]
+    fn jetbrains_patterns_match_only_ide_version_folders() {
+        let (_, contents) = CATALOG
+            .iter()
+            .find(|(dir_name, _)| *dir_name == "jetbrains")
+            .expect("catalog ships jetbrains");
+        let module = Module::parse(contents).expect("catalog manifest parses");
+
+        for path in module.targets.iter().flat_map(|t| t.paths()) {
+            let (parent, name) = path.rsplit_once('/').expect("pattern has a parent");
+            let pattern = glob::Pattern::new(name).expect("valid glob");
+            let (versions, siblings): (&[&str], &[&str]) = if parent.ends_with("/JetBrains") {
+                (
+                    &["IntelliJIdea2025.3", "IdeaIC2024.1", "PyCharmCE2023.2"],
+                    &["Toolbox", "consentOptions", "Fleet"],
+                )
+            } else if parent.ends_with("/Google") {
+                (
+                    &["AndroidStudio2026.1.3", "AndroidStudioPreview2026.2"],
+                    &["Chrome", "RLZ"],
+                )
+            } else {
+                panic!("unexpected parent directory in '{path}'");
+            };
+
+            for name in versions {
+                assert!(pattern.matches(name), "'{path}' should match {name}");
+            }
+            for name in siblings {
+                assert!(!pattern.matches(name), "'{path}' must not match {name}");
+            }
+        }
+    }
+
     #[test]
     fn disabled_ids_are_filtered_out() {
         let (all, _) = load_catalog(&[]);
