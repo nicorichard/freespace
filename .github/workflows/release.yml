@@ -66,10 +66,18 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes freespace-*.tar.gz freespace-*.tar.gz.sha256
+        run: |
+          # A hyphenated tag (v0.1.0-rc.1) is a semver pre-release: published,
+          # but never marked as the latest release.
+          FLAGS=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            FLAGS+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" --generate-notes "${FLAGS[@]}" freespace-*.tar.gz freespace-*.tar.gz.sha256
 
+  # Homebrew only ever tracks stable releases, so pre-release tags stop here.
   update-tap:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && !contains(github.ref_name, '-')
     needs: release
     runs-on: ubuntu-latest
     steps:
