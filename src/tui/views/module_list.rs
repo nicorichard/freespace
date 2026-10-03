@@ -79,13 +79,19 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
                 app.selected_index = count - 1;
             }
         }
-        // Enter detail view for selected module
+        // Enter detail view for selected module, or set up the folders a
+        // project module needs before it has any detail to show.
         KeyCode::Enter => {
             if let Some(&module_idx) = sorted.get(app.selected_index) {
-                app.module_list_index = app.selected_index;
-                app.clear_filter();
-                app.set_view(View::ModuleDetail(module_idx));
-                app.selected_index = 0;
+                if app.needs_project_setup(module_idx) {
+                    app.module_list_index = app.selected_index;
+                    app.open_project_setup();
+                } else {
+                    app.module_list_index = app.selected_index;
+                    app.clear_filter();
+                    app.set_view(View::ModuleDetail(module_idx));
+                    app.selected_index = 0;
+                }
             }
         }
         // Toggle selection for all items in the focused module
@@ -158,6 +164,11 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
                 app.enter_overlay(View::Info(module_idx));
             }
         }
+        // Choose the folders projects live in
+        KeyCode::Char('p') => {
+            app.module_list_index = app.selected_index;
+            app.open_project_setup();
+        }
         // Switch to flat view
         KeyCode::Tab => {
             app.module_list_index = app.selected_index;
@@ -182,21 +193,28 @@ pub fn handle_key(app: &mut App, key: KeyCode) {
     }
 }
 
-/// Sort module indices by size descending. 0 B modules sink to the bottom.
+/// Where a module sits relative to the others: modules with something to clean
+/// first, then ones waiting on project folders, then empty ones.
+fn sort_rank(app: &App, idx: usize) -> u8 {
+    if filtered_module_size(app, idx) != Some(0) {
+        0
+    } else if app.needs_project_setup(idx) {
+        1
+    } else {
+        2
+    }
+}
+
+/// Sort module indices by size descending. 0 B modules sink to the bottom,
+/// with not-set-up ones resting just above them where they can still be seen.
 fn sort_modules(app: &App, indices: &mut [usize]) {
     indices.sort_by(|&a, &b| {
         let size_a = filtered_module_size(app, a);
         let size_b = filtered_module_size(app, b);
 
-        // 0 B items sink to the bottom
-        let a_empty = size_a == Some(0);
-        let b_empty = size_b == Some(0);
-        if a_empty != b_empty {
-            return if a_empty {
-                std::cmp::Ordering::Greater
-            } else {
-                std::cmp::Ordering::Less
-            };
+        let rank = sort_rank(app, a).cmp(&sort_rank(app, b));
+        if rank != std::cmp::Ordering::Equal {
+            return rank;
         }
 
         // Sort by size descending
@@ -216,7 +234,9 @@ pub fn sorted_module_indices(app: &App) -> Vec<usize> {
             )
         })
         .filter(|&i| passes_structured_filter_module(app, i))
-        .filter(|&i| filtered_module_size(app, i) != Some(0))
+        // 0 B modules are skipped, unless their 0 B only means nobody has said
+        // where to look yet — those stay reachable so `↵` can fix that.
+        .filter(|&i| filtered_module_size(app, i) != Some(0) || app.needs_project_setup(i))
         .collect();
     sort_modules(app, &mut indices);
     indices
@@ -524,7 +544,8 @@ fn render_module_table(app: &mut App, frame: &mut Frame, area: Rect) {
             ""
         };
         let display_size = filtered_module_size(app, module_idx);
-        let is_empty = display_size == Some(0);
+        let needs_setup = app.needs_project_setup(module_idx);
+        let is_empty = display_size == Some(0) && !needs_setup;
         let dim_style = app.theme.style_border(); // mid-gray for 0 B modules
         let text_style = if is_empty {
             dim_style
@@ -575,34 +596,52 @@ fn render_module_table(app: &mut App, frame: &mut Frame, area: Rect) {
             name_spans.push(Span::styled(" \u{2191}", app.theme.style_warning()));
             // ↑
         }
+        // A module that also cleans elsewhere still shows its own size, so the
+        // part it cannot reach yet has to be said in the row.
+        if !needs_setup && app.search_dirs.is_empty() && ms.module.has_project_targets() {
+            name_spans.push(Span::styled(
+                "  \u{00b7} projects not set up",
+                app.theme.style_border(),
+            ));
+        }
         let name_cell = Cell::from(Line::from(name_spans));
 
         // Items count
-        let items_cell = Cell::from(Span::styled(
-            format!("{} items", ms.items.len()),
-            text_style,
-        ));
+        let items_cell = if needs_setup {
+            Cell::from(Span::styled("", text_style))
+        } else {
+            Cell::from(Span::styled(
+                format!("{} items", ms.items.len()),
+                text_style,
+            ))
+        };
 
-        // Size cell with appropriate styling
-        let size_cell = match &ms.status {
-            ModuleStatus::Loading | ModuleStatus::Discovering => Cell::from(Span::styled(
-                "calculating...",
-                app.theme.style_status_loading(),
-            )),
-            ModuleStatus::Error(e) => Cell::from(Span::styled(
-                format!("\u{26a0} {}", e),
-                app.theme.style_error(),
-            )),
-            ModuleStatus::Ready => {
-                let size_style = if is_empty {
-                    dim_style
-                } else {
-                    app.theme.style_size()
-                };
-                Cell::from(Span::styled(
-                    format_size_or_placeholder(display_size),
-                    size_style,
-                ))
+        // Size cell with appropriate styling. A module that searches only
+        // project folders reports the missing setting instead of 0 B, which
+        // would read as "you have no node_modules".
+        let size_cell = if needs_setup {
+            Cell::from(Span::styled("not set up", app.theme.style_warning()))
+        } else {
+            match &ms.status {
+                ModuleStatus::Loading | ModuleStatus::Discovering => Cell::from(Span::styled(
+                    "calculating...",
+                    app.theme.style_status_loading(),
+                )),
+                ModuleStatus::Error(e) => Cell::from(Span::styled(
+                    format!("\u{26a0} {}", e),
+                    app.theme.style_error(),
+                )),
+                ModuleStatus::Ready => {
+                    let size_style = if is_empty {
+                        dim_style
+                    } else {
+                        app.theme.style_size()
+                    };
+                    Cell::from(Span::styled(
+                        format_size_or_placeholder(display_size),
+                        size_style,
+                    ))
+                }
             }
         };
 
@@ -667,8 +706,21 @@ fn render_description_pane(app: &mut App, frame: &mut Frame, area: Rect) {
             ));
         }
     }
-    let line = Line::from(spans);
-    frame.render_widget(Paragraph::new(line), area);
+    let mut lines = vec![Line::from(spans)];
+
+    // The hint names its key: `p` is help-only, and a module that cleans
+    // projects is exactly where someone wants to know about it.
+    let unset_projects = selected.is_some_and(|idx| {
+        app.search_dirs.is_empty() && app.modules[idx].module.has_project_targets()
+    });
+    if unset_projects {
+        lines.push(Line::from(Span::styled(
+            " Project folders are not set up \u{2014} press p to choose where you keep projects",
+            app.theme.style_warning(),
+        )));
+    }
+
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn render_status_bar(app: &mut App, frame: &mut Frame, area: Rect) {

@@ -9,7 +9,7 @@ pub use filter::{matches_filter, matches_structured_filter};
 pub use types::{
     CleanupFailure, CleanupOutcome, CleanupProgressState, FlashLevel, InstallCandidate,
     InstallMessage, InstallPhase, Item, ItemType, ModuleInstallState, ModuleState, ModuleStatus,
-    ModuleUpdateStatus, ScanStatus, SiblingUpdatePrompt, View,
+    ModuleUpdateStatus, ProjectSetupState, ScanStatus, SiblingUpdatePrompt, View,
 };
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -158,6 +158,11 @@ pub struct App {
     cleanup_labels: HashMap<PathBuf, String>,
     /// Outcome of the last cleanup, when it had failures worth reading.
     pub cleanup_outcome: Option<CleanupOutcome>,
+    /// Folders searched for project build artifacts. Empty means project
+    /// modules have nowhere to look, which the UI reports as "not set up".
+    pub search_dirs: Vec<PathBuf>,
+    /// State for the project-folder picker (None when it is closed).
+    pub project_setup: Option<ProjectSetupState>,
 }
 
 /// Spawn background update checks for all git-sourced modules.
@@ -336,7 +341,7 @@ impl App {
         let (scan_status, scan_cancel) = if manifests.is_empty() {
             (ScanStatus::Complete, Arc::new(AtomicBool::new(false)))
         } else {
-            let cancel = scanner::start_scan(manifests, tx.clone(), search_dirs);
+            let cancel = scanner::start_scan(manifests, tx.clone(), search_dirs.clone());
             (ScanStatus::Scanning, cancel)
         };
 
@@ -345,7 +350,7 @@ impl App {
         // Spawn background update checks for git-sourced modules
         let update_check_rx = spawn_update_checks(&modules);
 
-        Self {
+        let mut app = Self {
             modules,
             current_view: View::ModuleList,
             selected_index: 0,
@@ -406,7 +411,20 @@ impl App {
             cleanup_item_meta: HashMap::new(),
             cleanup_labels: HashMap::new(),
             cleanup_outcome: None,
+            search_dirs,
+            project_setup: None,
+        };
+
+        // Project modules find nothing until they are told where to look, and
+        // the setting is easy to never discover. Say so once, on the way in.
+        if app.project_dirs_unset() {
+            app.set_flash(
+                "No project folders set up \u{2014} press p to choose where you keep projects",
+                FlashLevel::Warning,
+            );
         }
+
+        app
     }
 
     /// Create a new App in install-only mode: no scanning, just the install picker.
@@ -475,6 +493,8 @@ impl App {
             cleanup_item_meta: HashMap::new(),
             cleanup_labels: HashMap::new(),
             cleanup_outcome: None,
+            search_dirs: Vec::new(),
+            project_setup: None,
         };
         app.start_module_install(source_str, modules_dir, link);
         app
@@ -786,6 +806,7 @@ impl App {
         let (modules, search_dirs, config) =
             Self::load_modules_and_config(Vec::new(), Vec::new(), false);
         self.modules = modules;
+        self.search_dirs = search_dirs.clone();
         self.protected_paths = safety::expand_protected_paths(&config.protected_paths);
         self.selected_items.clear();
         self.confirm_checked.clear();
@@ -862,6 +883,97 @@ impl App {
         }
 
         CheckState::None
+    }
+
+    /// Whether project modules have nowhere to search.
+    ///
+    /// True only when a module would look for project build output and no
+    /// `search_dirs` is configured — that combination is the difference
+    /// between "nothing to clean" and "nowhere to look".
+    pub fn project_dirs_unset(&self) -> bool {
+        self.search_dirs.is_empty() && self.modules.iter().any(|m| m.module.has_project_targets())
+    }
+
+    /// Whether a module has nothing to show at all until project folders are set.
+    pub fn needs_project_setup(&self, idx: usize) -> bool {
+        self.search_dirs.is_empty()
+            && self
+                .modules
+                .get(idx)
+                .is_some_and(|ms| ms.module.is_project_only())
+    }
+
+    /// Open the project folder picker, pre-filled from the current config.
+    pub(crate) fn open_project_setup(&mut self) {
+        let configured = AppConfig::load().map(|c| c.search_dirs).unwrap_or_default();
+        self.project_setup = Some(ProjectSetupState::new(&configured));
+        self.clear_filter();
+        self.set_view(View::ProjectSetup);
+    }
+
+    /// Close the picker, discarding whatever was chosen in it.
+    pub(crate) fn cancel_project_setup(&mut self) {
+        self.project_setup = None;
+        self.set_view(View::ModuleList);
+    }
+
+    /// Add a typed path to the picker, or say why it cannot be added.
+    pub(crate) fn add_project_dir(&mut self, typed: &str) -> Result<(), String> {
+        let expanded = crate::core::paths::expand_tilde(typed);
+        if !expanded.is_dir() {
+            // Echo what was typed, not the expansion: an expanded home path is
+            // long enough to overflow the dialog and says nothing extra.
+            return Err(format!("{} is not a folder", typed));
+        }
+        let home = dirs::home_dir().unwrap_or_default();
+        let path = crate::core::paths::contract_tilde(&expanded, &home);
+
+        let Some(state) = self.project_setup.as_mut() else {
+            return Ok(());
+        };
+        match state.candidates.iter_mut().find(|c| c.path == path) {
+            // Already on offer: check it rather than listing it twice.
+            Some(existing) => existing.checked = true,
+            None => state.candidates.push(crate::config::ProjectDirCandidate {
+                path,
+                checked: true,
+                note: None,
+            }),
+        }
+        Ok(())
+    }
+
+    /// Write the chosen folders to config and rescan with them.
+    pub(crate) fn save_project_setup(&mut self) {
+        let Some(state) = self.project_setup.take() else {
+            return;
+        };
+        let chosen = state.chosen();
+
+        let mut config = match AppConfig::load() {
+            Ok(config) => config,
+            Err(e) => {
+                self.set_flash(format!("Could not read config: {}", e), FlashLevel::Error);
+                self.set_view(View::ModuleList);
+                return;
+            }
+        };
+        config.search_dirs = chosen.clone();
+        if let Err(e) = config.save() {
+            self.set_flash(format!("Could not save config: {}", e), FlashLevel::Error);
+            self.set_view(View::ModuleList);
+            return;
+        }
+
+        self.set_view(View::ModuleList);
+        self.selected_index = 0;
+        self.reload_modules();
+
+        if chosen.is_empty() {
+            self.set_flash("No project folders set", FlashLevel::Warning);
+        } else {
+            self.set_flash(format!("Searching {}", chosen.join(", ")), FlashLevel::Info);
+        }
     }
 
     /// Change the current view and reset scroll offset to the top.
@@ -1289,7 +1401,7 @@ impl App {
             && !self.filter_active
             && !matches!(
                 self.current_view,
-                View::CleanupProgress | View::ModuleInstall
+                View::CleanupProgress | View::ModuleInstall | View::ProjectSetup
             )
         {
             self.should_quit = true;
@@ -1306,6 +1418,7 @@ impl App {
                     | View::CleanupProgress
                     | View::CleanupConfirm
                     | View::ModuleInstall
+                    | View::ProjectSetup
             )
         {
             self.filter_menu_open = true;
@@ -1327,6 +1440,7 @@ impl App {
             View::FlatView => views::flat_view::handle_key(self, key),
             View::FileBrowser => views::file_browser::handle_key(self, key),
             View::ModuleInstall => views::module_install::handle_key(self, key),
+            View::ProjectSetup => views::project_setup::handle_key(self, key),
         }
     }
 
@@ -2127,6 +2241,7 @@ impl App {
             View::FlatView => views::flat_view::render(self, frame),
             View::FileBrowser => views::file_browser::render(self, frame),
             View::ModuleInstall => views::module_install::render(self, frame),
+            View::ProjectSetup => views::project_setup::render(self, frame),
         }
 
         // Overlay: cleanup action choice dialog
@@ -2205,6 +2320,8 @@ impl App {
             cleanup_item_meta: HashMap::new(),
             cleanup_labels: HashMap::new(),
             cleanup_outcome: None,
+            search_dirs: Vec::new(),
+            project_setup: None,
         }
     }
 }
@@ -2610,6 +2727,168 @@ mod tests {
         app.filter_query = "dock".to_string();
         let sorted = crate::tui::views::module_list::sorted_module_indices(&app);
         assert_eq!(sorted.len(), 1);
+    }
+
+    // --- Project folder setup ---
+
+    /// A module that only searches project folders, like node-modules.
+    fn make_project_module(name: &str) -> ModuleState {
+        let mut ms = make_module(name, vec![]);
+        ms.module.targets = vec![Target {
+            source: crate::module::manifest::TargetSource::Paths(vec![
+                "**/node_modules".to_string()
+            ]),
+            ..Default::default()
+        }];
+        ms.total_size = Some(0);
+        ms
+    }
+
+    #[test]
+    fn project_module_without_search_dirs_stays_reachable() {
+        let mut empty = make_module("empty", vec![]);
+        empty.total_size = Some(0);
+        let app = App::new_for_test(vec![empty, make_project_module("node")]);
+
+        assert!(app.project_dirs_unset());
+        assert!(app.needs_project_setup(1));
+        // The empty module is still skipped; the not-set-up one is not.
+        let sorted = crate::tui::views::module_list::sorted_module_indices(&app);
+        assert_eq!(sorted, vec![1]);
+    }
+
+    #[test]
+    fn project_module_with_search_dirs_is_just_empty() {
+        let mut app = App::new_for_test(vec![make_project_module("node")]);
+        app.search_dirs = vec![PathBuf::from("/tmp/projects")];
+
+        assert!(!app.project_dirs_unset());
+        assert!(!app.needs_project_setup(0));
+        let sorted = crate::tui::views::module_list::sorted_module_indices(&app);
+        assert!(sorted.is_empty());
+    }
+
+    #[test]
+    fn enter_on_a_not_set_up_module_opens_the_picker() {
+        let mut app = App::new_for_test(vec![make_project_module("node")]);
+
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+        assert!(matches!(app.current_view, View::ProjectSetup));
+        assert!(app.project_setup.is_some());
+    }
+
+    #[test]
+    fn p_opens_the_picker_from_the_module_list() {
+        let mut app = make_test_app();
+
+        app.handle_key(KeyCode::Char('p'), KeyModifiers::NONE);
+
+        assert!(matches!(app.current_view, View::ProjectSetup));
+    }
+
+    #[test]
+    fn esc_closes_the_picker_without_saving() {
+        let mut app = make_test_app();
+        app.open_project_setup();
+
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+
+        assert!(matches!(app.current_view, View::ModuleList));
+        assert!(app.project_setup.is_none());
+    }
+
+    #[test]
+    fn q_types_into_the_picker_instead_of_quitting() {
+        let mut app = make_test_app();
+        app.open_project_setup();
+        app.project_setup.as_mut().unwrap().start_input();
+
+        app.handle_key(KeyCode::Char('q'), KeyModifiers::NONE);
+
+        assert!(!app.should_quit);
+        assert_eq!(
+            app.project_setup.as_ref().unwrap().input.as_deref(),
+            Some("q")
+        );
+    }
+
+    #[test]
+    fn space_toggles_a_folder_and_chosen_follows() {
+        let mut app = make_test_app();
+        app.open_project_setup();
+        let state = app.project_setup.as_mut().unwrap();
+        state.candidates = vec![
+            crate::config::ProjectDirCandidate {
+                path: "~/Projects".to_string(),
+                checked: false,
+                note: None,
+            },
+            crate::config::ProjectDirCandidate {
+                path: "~/Work".to_string(),
+                checked: false,
+                note: None,
+            },
+        ];
+        state.cursor = 0;
+
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
+
+        let state = app.project_setup.as_ref().unwrap();
+        assert_eq!(state.chosen(), vec!["~/Projects".to_string()]);
+    }
+
+    #[test]
+    fn a_and_n_select_every_folder_and_none() {
+        let mut app = make_test_app();
+        app.open_project_setup();
+        app.project_setup.as_mut().unwrap().candidates = vec![
+            crate::config::ProjectDirCandidate {
+                path: "~/Projects".to_string(),
+                checked: false,
+                note: None,
+            },
+            crate::config::ProjectDirCandidate {
+                path: "~/Work".to_string(),
+                checked: true,
+                note: None,
+            },
+        ];
+
+        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert_eq!(app.project_setup.as_ref().unwrap().chosen().len(), 2);
+
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE);
+        assert!(app.project_setup.as_ref().unwrap().chosen().is_empty());
+    }
+
+    #[test]
+    fn a_typed_path_that_is_not_a_folder_is_refused() {
+        let mut app = make_test_app();
+        app.open_project_setup();
+
+        let result = app.add_project_dir("/definitely/not/here");
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn a_typed_path_already_on_offer_is_checked_not_repeated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().to_string();
+        let mut app = make_test_app();
+        app.open_project_setup();
+        app.project_setup.as_mut().unwrap().candidates = vec![crate::config::ProjectDirCandidate {
+            path: path.clone(),
+            checked: false,
+            note: None,
+        }];
+
+        app.add_project_dir(&path).unwrap();
+
+        let state = app.project_setup.as_ref().unwrap();
+        assert_eq!(state.candidates.len(), 1);
+        assert!(state.candidates[0].checked);
     }
 
     // --- Cleanup confirm ---

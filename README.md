@@ -57,6 +57,15 @@ freespace module enable steam
 
 Freespace deletes files. We require confirmation before any cleanup, but please review what you're removing and keep backups of anything important. Use at your own risk — see the MIT license for details.
 
+## Project build output
+
+Build output inside your own projects — `node_modules`, `.next`, `.build`, `__pycache__`, `target` — is often the biggest thing on the disk, and freespace has to be told where your projects live before it can find any of it. Press `p` in the TUI to pick those folders, or:
+
+```sh
+freespace config add-search-dir ~/Projects
+freespace .                        # search one folder, just this once
+```
+
 ## Configuration
 
 Freespace can be configured via `~/.config/freespace/config.toml`. See the [configuration docs](docs/configuration.md) for all available options.

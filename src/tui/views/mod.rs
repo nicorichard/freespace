@@ -10,3 +10,4 @@ pub mod install_select;
 pub mod module_detail;
 pub mod module_install;
 pub mod module_list;
+pub mod project_setup;

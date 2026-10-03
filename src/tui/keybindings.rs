@@ -94,6 +94,7 @@ pub const MODULE_LIST: &[HotkeyDef] = &[
         style: Some(clean_appearance),
     },
     hk("⇥", "flat", "Switch to all-items view"),
+    hk_help("p", "projects", "Choose the folders your projects live in"),
     hk_help("U", "update", "Update all outdated modules"),
     hk("?", "help", "Toggle help overlay"),
     hk_help("q", "quit", "Quit application"),
@@ -212,6 +213,23 @@ pub const MODULE_INSTALL: &[HotkeyDef] = &[
     hk_help("↵", "confirm", "Confirm and install"),
     hk("esc", "back", "Cancel"),
     hk("?", "help", "Toggle help overlay"),
+];
+
+// ---------------------------------------------------------------------------
+// Project folder picker
+// ---------------------------------------------------------------------------
+
+pub const PROJECT_SETUP: &[HotkeyDef] = &[
+    hk("\u{2423}", "toggle", "Toggle folder"),
+    hk("a", "all", "Select all folders"),
+    hk("n", "none", "Deselect all folders"),
+    hk("\u{21b5}", "save", "Save and rescan"),
+    hk("esc", "cancel", "Close without saving"),
+];
+
+pub const PROJECT_SETUP_INPUT: &[HotkeyDef] = &[
+    hk("\u{21b5}", "add", "Add the typed folder"),
+    hk("esc", "cancel", "Stop typing"),
 ];
 
 // ---------------------------------------------------------------------------

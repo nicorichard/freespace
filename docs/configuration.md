@@ -34,11 +34,25 @@ module_dirs = ["~/my-custom-modules", "/opt/shared-modules"]
 - **Type:** list of strings
 - **Default:** `[]`
 
-Directories to search for items.
+Folders that hold your projects. Modules that clean build output left inside a
+project — `node_modules`, `.next`, `.build`, `__pycache__`, `target` and the
+rest — search these folders recursively, and find nothing while the list is
+empty. Modules that clean fixed paths, like `~/.npm`, ignore this setting.
 
 ```toml
 search_dirs = ["~/Projects", "~/Work"]
 ```
+
+Press `p` in the TUI to pick these folders from a list of likely candidates, or
+set them from the shell:
+
+```sh
+freespace config add-search-dir ~/Projects
+freespace config remove-search-dir ~/Projects
+```
+
+`freespace <path>` searches that one folder for the current run without
+changing the config.
 
 ### `audit_log`
 

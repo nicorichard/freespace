@@ -248,6 +248,27 @@ where
 }
 
 impl Module {
+    /// Whether any target searches the user's project folders (`**/name`).
+    ///
+    /// These targets find nothing until `search_dirs` names somewhere to look,
+    /// so the UI uses this to tell "nothing to clean" apart from "nowhere to
+    /// look yet".
+    pub fn has_project_targets(&self) -> bool {
+        self.targets
+            .iter()
+            .any(|t| t.local_search_names().next().is_some())
+    }
+
+    /// Whether *every* target searches project folders, leaving the module with
+    /// nothing at all to show until `search_dirs` is set.
+    pub fn is_project_only(&self) -> bool {
+        !self.targets.is_empty()
+            && self
+                .targets
+                .iter()
+                .all(|t| t.local_search_names().next().is_some())
+    }
+
     /// Deserialize from a TOML string and validate.
     pub fn parse(toml_str: &str) -> Result<Module> {
         let raw: RawModule = toml::from_str(toml_str)?;
@@ -501,6 +522,59 @@ mod tests {
         assert_eq!(module.version, "1.0.0");
         assert_eq!(module.targets.len(), 1);
         assert_eq!(module.targets[0].paths(), vec!["~/Library/Caches/test"]);
+    }
+
+    #[test]
+    fn project_target_classification() {
+        let project_only = Module::parse(
+            r#"
+            id = "web"
+            name = "Web"
+            version = "1.0.0"
+            description = "d"
+            author = "a"
+            platforms = ["macos"]
+            [[targets]]
+            path = "**/.next"
+            "#,
+        )
+        .unwrap();
+        assert!(project_only.has_project_targets());
+        assert!(project_only.is_project_only());
+
+        let mixed = Module::parse(
+            r#"
+            id = "mixed"
+            name = "Mixed"
+            version = "1.0.0"
+            description = "d"
+            author = "a"
+            platforms = ["macos"]
+            [[targets]]
+            path = "~/.cache/pip"
+            [[targets]]
+            path = "**/__pycache__"
+            "#,
+        )
+        .unwrap();
+        assert!(mixed.has_project_targets());
+        assert!(!mixed.is_project_only());
+
+        let global = Module::parse(
+            r#"
+            id = "global"
+            name = "Global"
+            version = "1.0.0"
+            description = "d"
+            author = "a"
+            platforms = ["macos"]
+            [[targets]]
+            path = "~/.cache/pip"
+            "#,
+        )
+        .unwrap();
+        assert!(!global.has_project_targets());
+        assert!(!global.is_project_only());
     }
 
     #[test]

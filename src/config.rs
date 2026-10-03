@@ -1,6 +1,6 @@
 // Application configuration.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Upstream repository the built-in catalog is sourced from. Used to recognise
 /// an installed module as a duplicate of a built-in rather than a deliberate
@@ -160,6 +160,103 @@ impl AppConfig {
     }
 }
 
+/// Folder names under `$HOME` that commonly hold checked-out projects. Offered
+/// as pre-filled choices when a user has no `search_dirs` yet, so setting up
+/// project cleanup is a keypress rather than a path to type.
+const COMMON_PROJECT_DIRS: &[&str] = &[
+    "Developer",
+    "Projects",
+    "projects",
+    "Code",
+    "code",
+    "src",
+    "dev",
+    "repos",
+    "git",
+    "workspace",
+    "Documents/GitHub",
+];
+
+/// One choice in the project-folder picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectDirCandidate {
+    /// The path as it is stored in config and shown to the user (`~`-contracted).
+    pub path: String,
+    /// Whether it is currently chosen.
+    pub checked: bool,
+    /// Where this choice came from, shown beside the path.
+    pub note: Option<&'static str>,
+}
+
+/// Build the choices offered by the project-folder picker.
+///
+/// Already-configured directories come first and stay checked, so the picker
+/// doubles as the way to remove one. Everything after them is a guess: common
+/// project folders that exist, then the directory freespace was launched from.
+pub fn project_dir_candidates(
+    home: &Path,
+    cwd: Option<&Path>,
+    configured: &[String],
+) -> Vec<ProjectDirCandidate> {
+    let mut candidates: Vec<ProjectDirCandidate> = Vec::new();
+    // Identity for de-duplication: the resolved path where it resolves, so a
+    // case-insensitive filesystem does not offer ~/Projects and ~/projects as
+    // two separate folders.
+    let mut seen: Vec<PathBuf> = Vec::new();
+
+    for dir in configured {
+        let expanded = crate::core::paths::expand_tilde_in(dir, home);
+        let key = std::fs::canonicalize(&expanded).unwrap_or_else(|_| expanded.clone());
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        candidates.push(ProjectDirCandidate {
+            path: crate::core::paths::contract_tilde(&expanded, home),
+            checked: true,
+            note: Some("in use"),
+        });
+    }
+
+    let mut offer = |path: PathBuf, note: Option<&'static str>| {
+        if !path.is_dir() {
+            return;
+        }
+        let resolved = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if seen.contains(&resolved) {
+            return;
+        }
+        // On a case-insensitive filesystem `~/Code` opens a folder named
+        // `code`. Offer the name as it is actually spelled, so what lands in
+        // config still works on a case-sensitive one.
+        let path = match (resolved.file_name(), path.file_name()) {
+            (Some(actual), Some(asked)) if actual != asked => path.with_file_name(actual),
+            _ => path.clone(),
+        };
+        seen.push(resolved);
+        candidates.push(ProjectDirCandidate {
+            path: crate::core::paths::contract_tilde(&path, home),
+            checked: false,
+            note,
+        });
+    };
+
+    for name in COMMON_PROJECT_DIRS {
+        offer(home.join(name), None);
+    }
+
+    // The launch directory is only a useful guess when it is somewhere below
+    // home — `~` and `/` are too broad to walk, and offering them invites a
+    // scan of the whole disk.
+    if let Some(cwd) = cwd {
+        if cwd != home && cwd.starts_with(home) {
+            offer(cwd.to_path_buf(), Some("current directory"));
+        }
+    }
+
+    candidates
+}
+
 /// Returns `~/.config/freespace` (always uses `~/.config`, not the platform default).
 pub fn config_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".config").join("freespace"))
@@ -238,6 +335,96 @@ mod tests {
     fn parse_icons_defaults_to_enabled() {
         let config: AppConfig = toml::from_str("").unwrap();
         assert!(config.icons.enabled);
+    }
+
+    #[test]
+    fn candidates_list_configured_dirs_first_and_checked() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join("Projects")).unwrap();
+
+        let candidates = project_dir_candidates(
+            home.path(),
+            None,
+            &["~/Work".to_string(), "~/Projects".to_string()],
+        );
+
+        assert_eq!(candidates[0].path, "~/Work");
+        assert_eq!(candidates[1].path, "~/Projects");
+        assert!(candidates[0].checked && candidates[1].checked);
+        // ~/Projects exists as a common dir too, but is only offered once.
+        assert_eq!(
+            candidates.iter().filter(|c| c.path == "~/Projects").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn candidates_offer_only_common_dirs_that_exist() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join("Developer")).unwrap();
+
+        let candidates = project_dir_candidates(home.path(), None, &[]);
+
+        let paths: Vec<&str> = candidates.iter().map(|c| c.path.as_str()).collect();
+        assert_eq!(paths, vec!["~/Developer"]);
+        assert!(!candidates[0].checked);
+    }
+
+    #[test]
+    fn candidates_offer_a_folder_once_however_it_is_spelled() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join("Projects")).unwrap();
+
+        let candidates = project_dir_candidates(home.path(), None, &[]);
+
+        // On a case-insensitive filesystem `~/projects` resolves to the same
+        // folder, and is offered once, under the name it really has.
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].path, "~/Projects");
+    }
+
+    #[test]
+    fn candidates_use_the_spelling_on_disk() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join("code")).unwrap();
+
+        let candidates = project_dir_candidates(home.path(), None, &[]);
+
+        // `Code` is tried before `code`; a case-insensitive filesystem matches
+        // it, and the folder is still offered as `~/code`.
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].path, "~/code");
+    }
+
+    #[test]
+    fn candidates_offer_the_launch_directory() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = home.path().join("rust/freespace");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let candidates = project_dir_candidates(home.path(), Some(&cwd), &[]);
+
+        assert_eq!(candidates[0].path, "~/rust/freespace");
+        assert_eq!(candidates[0].note, Some("current directory"));
+    }
+
+    #[test]
+    fn candidates_skip_a_launch_directory_outside_home() {
+        let home = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+
+        let candidates = project_dir_candidates(home.path(), Some(elsewhere.path()), &[]);
+
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn candidates_skip_home_itself() {
+        let home = tempfile::tempdir().unwrap();
+
+        let candidates = project_dir_candidates(home.path(), Some(home.path()), &[]);
+
+        assert!(candidates.is_empty());
     }
 
     #[test]

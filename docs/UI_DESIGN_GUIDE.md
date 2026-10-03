@@ -153,7 +153,8 @@ The UI has two categories of view:
   there is something to search or select. A read-only screen such as
   CleanupResults carries neither.
 - **Dialogs** are small, transient call-to-action surfaces (Help overlay, Info
-  overlay, FilterMenu, CleanupProgress, inline confirmations like `[y]es [n]o`).
+  overlay, FilterMenu, ProjectSetup, CleanupProgress, inline confirmations like
+  `[y]es [n]o`).
   They do **not** need `[?] help`, search, or multi-select — they should be
   minimal and fast to dismiss. They only need the keys directly relevant to the
   action at hand.
@@ -182,6 +183,13 @@ The UI has two categories of view:
 - Shows a spinner, item counter, and current file path. Not scrollable.
 - `Ctrl+C` halts; halted state offers `q` to quit or any key to continue.
 - No `[?] help` needed — the available actions are self-evident.
+
+### Project folders dialog (`p`)
+
+- Lists likely project folders with checkboxes; `␣` toggles, `a` / `n` select
+  all or none, `↵` saves to `config.toml` and rescans, `esc` backs out.
+- The last row opens a text field for a folder the guesses missed. A path that
+  is not a directory is refused inline, showing what was typed.
 
 ### Confirmation dialogs
 

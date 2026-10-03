@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use crate::config::ProjectDirCandidate;
 use crate::module::manifest::Module;
 
 /// Severity level for flash messages shown in the status bar.
@@ -25,6 +26,61 @@ pub enum View {
     FileBrowser,
     ModuleInstall,
     CleanupResults,
+    ProjectSetup,
+}
+
+/// State for the project-folder picker dialog.
+///
+/// Opened when project modules have nowhere to search, and from `p` on the
+/// module list to revisit the choice.
+pub struct ProjectSetupState {
+    /// Folders on offer, in display order.
+    pub candidates: Vec<ProjectDirCandidate>,
+    /// Cursor over the rows; `candidates.len()` is the "add another folder" row.
+    pub cursor: usize,
+    /// Path being typed into the "add another folder" row, when it is active.
+    pub input: Option<String>,
+    /// What went wrong with the last typed path, shown under the list.
+    pub error: Option<String>,
+}
+
+impl ProjectSetupState {
+    /// Build the picker from what is configured now, plus likely folders.
+    pub fn new(configured: &[String]) -> Self {
+        let home = dirs::home_dir().unwrap_or_default();
+        let cwd = std::env::current_dir().ok();
+        Self {
+            candidates: crate::config::project_dir_candidates(&home, cwd.as_deref(), configured),
+            cursor: 0,
+            input: None,
+            error: None,
+        }
+    }
+
+    /// Number of navigable rows: every candidate plus the "add another" row.
+    pub fn row_count(&self) -> usize {
+        self.candidates.len() + 1
+    }
+
+    /// Whether the cursor sits on the "add another folder" row.
+    pub fn on_add_row(&self) -> bool {
+        self.cursor >= self.candidates.len()
+    }
+
+    /// Begin typing a path into the "add another folder" row.
+    pub fn start_input(&mut self) {
+        self.input = Some(String::new());
+        self.error = None;
+    }
+
+    /// The folders the user has chosen, in display order.
+    pub fn chosen(&self) -> Vec<String> {
+        self.candidates
+            .iter()
+            .filter(|c| c.checked)
+            .map(|c| c.path.clone())
+            .collect()
+    }
 }
 
 /// One item that could not be removed, kept for the results view.
